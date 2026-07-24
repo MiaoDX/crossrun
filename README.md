@@ -26,29 +26,39 @@ None of this is our invention. The contribution here is putting it together clea
 A thin, opinionated middle layer — plus the demos that argue for it.
 
 ```
-model containers          π0.5 · OpenVLA · XPolicyLab · your own
-        │                 (obs update / predict / reset / batched)
-        ▼
-   protocol              strong schema, obs key mapping,
-        │                action-space tagging
-        ▼
-   ⭐ runner              SimRunner          RealRunner
-        │                 reset:   env       reset:   learned/manual
-        │                 success: predicate success: VLM classifier
-        │                 safe:    always    safe:    limits + motors
-        │                 time:    stepped   time:    wall-clock
-        ▼
-   backends              MuJoCo · Isaac Lab-Arena · Genie Sim · real hardware
+ policy providers    one model each        a whole zoo
+                     π0.5 · OpenVLA        ╔═════════════════╗
+                     · your own            ║ XPolicyLab (40+)║
+                            │              ╚════════╤════════╝
+                            └───────┬───────────────┘
+                                    │  4 ops: obs update · predict
+                                    │         · reset · batched
+                                    ▼
+ protocol            strong schema, obs key mapping, action-space tagging
+                                    │
+                                    ▼
+ ⭐ runner            SimRunner              RealRunner
+                     reset:   env           reset:   learned / manual
+                     success: predicate     success: VLM classifier
+                     safe:    always        safe:    limits + motors
+                     time:    stepped       time:    wall-clock
+                                    │
+                                    ▼
+ backends            MuJoCo · Isaac Lab-Arena · Genie Sim · real hardware
 ```
 
-The **runner** is the part worth stealing. It is what makes "the same policy, the same protocol, in simulation and on hardware" a fact rather than a slogan.
+Two things are worth pointing out in that picture.
+
+**XPolicyLab is not a model.** It is a policy-serving framework that already hosts 40+ policies, so it plugs in as a *source of many* rather than as one more container. Its four-operation interface is also where our protocol contract comes from — but the protocol stays ours, because it has to carry things XPolicyLab wasn't built for (SONIC's 78-dim latent tokens, Arena's own policy convention).
+
+**The runner is the part worth stealing.** It is what makes "the same policy, the same protocol, in simulation and on hardware" a fact rather than a slogan.
 
 ## Design theses
 
 Each of these should show up in the code and be defended by a demo:
 
 1. **Protocol before implementation.** Models and simulators are both replaceable.
-2. **Models do not live in this repo.** One container per model; we hold the contract.
+2. **Models do not live in this repo.** One container per model — or one bridge for a whole zoo; we hold only the contract.
 3. **Backends need not be compatible with each other** — only with the protocol.
 4. **The default path must be frictionless.** Heavy backends are opt-in, always.
 5. **Numbers ship with uncertainty.** A bare success rate is a bug.
