@@ -1,158 +1,158 @@
-# 对抗式深度评估：初版方案的红队分析
+# Red-Team Review of the First Draft Plan
 
-> 调研时间：2026 年 7 月 · 针对 crossrun 早期方案（当时定位为"内部评测体系"）的批判性审查
-> ⚠️ 部分前提已变化（算力约束不成立、不做商业化），见 [README](README.md)
+> Conducted July 2026 · an adversarial review of crossrun's early plan, when it was still scoped as an internal evaluation system
+> ⚠️ Some premises no longer hold (the compute constraint, the commercialisation assumption) — see [README](README.md)
 
-**本文档的基调**：这是一次**对抗式评估**，主动寻找反例、失败案例、被低估的风险，以及"这个方案可能整体就是错的"的论据。不做验证式附和。
+**The stance of this document**: this is an **adversarial** review. It looks for counterexamples, failure cases, underestimated risks, and arguments that the plan may be wrong as a whole. It does not confirm.
 
-## 执行摘要
+## Executive summary
 
-**总体结论：方案的技术判断大体正确，但把最重的赌注压在了生态风险最高、成本最高的那一环（Isaac）。**
+**The plan's technical judgement is broadly sound, but it places its heaviest bet on the component with the highest ecosystem risk and the highest cost: Isaac.**
 
-方案里最聪明的部分——薄编排层、0 fork、policy 协议抽象、双后端交叉验证、用 SimplerEnv MMRV 做锚点、引入 LIBERO-Plus/PRO 式扰动防记忆——与当前学术界共识高度一致，是有强证据支持的正确选择。但存在三个盲区：
+Its best parts — a thin orchestration layer, no forks, a policy protocol abstraction, dual-backend cross-validation, SimplerEnv MMRV as an anchor, and LIBERO-Plus/PRO perturbation tiers against memorisation — align well with current academic consensus and rest on strong evidence. Three blind spots remain:
 
-1. **完全没算过算力与许可证的账**——Isaac Sim 官方系统要求明确写"没有 RT Core 的 GPU（A100、H100）不受支持"，最低 GeForce RTX 4080（16GB）；NVIDIA/Lightwheel 跑 4096 并行用的是 8× RTX 6000D，仅 GPU 成本就约 5.2 万–6.4 万美元。
-2. **把地基押在一个 pre-alpha、"公开接口将无弃用警告地变更"的 Isaac Lab-Arena 上**，而 NVIDIA 在机器人仿真栈上有反复推倒重来的历史。
-3. **根本性价值质疑**——头部实验室仍以真机评测为黄金标准，sim eval 只是"便宜的初筛"。
+1. **Compute and licensing were never costed.** Isaac Sim's official requirements state plainly that GPUs without RT cores (A100, H100) are unsupported, with a GeForce RTX 4080 (16GB) as the floor. NVIDIA and Lightwheel's 4,096-parallel configuration uses 8× RTX 6000D — roughly $52,000–$64,000 in GPUs alone.
+2. **The foundation is a pre-alpha whose public interfaces change without deprecation warnings**, from a vendor with a history of rebuilding its robotics simulation stack.
+3. **A deeper doubt about value**: leading labs still treat real-hardware evaluation as the gold standard, with sim eval serving as a cheap first pass.
 
-## 红队分析：方案可能失败的方式
+## Red team: how this could fail
 
-按"概率 × 影响"从高到低排列。
+Ordered by probability × impact.
 
-### R1【高×高】工程负担压垮小团队，永远到不了"第一个可信数字"
+### R1 [high × high] Engineering load buries a small team before the first credible number
 
-Isaac Sim 的运维负担在社区被反复记录——安装报错、驱动版本地狱（报错要求 driver 精确落在某区间）、Docker/WSL2 下 GPU 透传失败、容器在 Nucleus server 上起不来等，横跨 2021–2026 年多个版本仍然高发。对比 MuJoCo：`pip install mujoco` 十分钟可跑。**证据强度：强。**
+Isaac Sim's operational burden is documented repeatedly across the community: installation failures, driver version hell (errors demanding a driver inside a precise range), GPU passthrough failures under Docker and WSL2, containers failing to start against a Nucleus server. These span 2021–2026 and multiple versions. By contrast `pip install mujoco` runs in ten minutes. **Evidence: strong.**
 
-### R2【中×高】Isaac 生态 churn 让地基作废
+### R2 [medium × high] Isaac ecosystem churn invalidates the foundation
 
-NVIDIA 已有明确的推倒重来历史——Isaac Gym Preview 4 "不再更新且不再支持"；IsaacGymEnvs / OmniIsaacGymEnvs / Orbit 全部被弃用并强制迁移到 Isaac Lab；2024 年 6 月 Isaac Gym 下载链接被"意外移除"，社区研究者在官方论坛抱怨大量工作依赖 IsaacGym、结果无法复现。如今 Newton 物理引擎（NVIDIA+DeepMind+Disney，Linux Foundation，Apache 2.0，仍 alpha）刚进入 Isaac Lab。Isaac Lab-Arena 仍是 pre-alpha（v0.2.x），README 明确"公开接口在积极开发中，将无弃用警告地变更……这不是 Early Access 或 GA，而是非常早期的社区代码投放"。**证据强度：强。**
+NVIDIA has a clear history here. Isaac Gym Preview 4 is "no longer updated or supported"; IsaacGymEnvs, OmniIsaacGymEnvs, and Orbit were all deprecated in favour of Isaac Lab; in June 2024 the Isaac Gym download link was removed unannounced, and researchers complained on the official forums that a great deal of work depended on it and results were no longer reproducible. Newton (NVIDIA, DeepMind, and Disney, under the Linux Foundation, Apache 2.0, still alpha) has now entered Isaac Lab. Isaac Lab-Arena remains pre-alpha (v0.2.x), with a README stating that public interfaces are under active development and will change without deprecation warnings, and that this is neither Early Access nor GA but a very early community code drop. **Evidence: strong.**
 
-### R3【中×高】做出来的数字没人信/没人用
+### R3 [medium × high] The numbers convince nobody
 
-(a) sim 数字的外部公信力天然受 sim2real gap 限制——RoboArena 论文明确批评中心化的纯 sim 榜系统性地低估真机表现；(b) 内部 benchmark 被自己团队优化到失去信号（Goodhart's law）；(c) LIBERO-PRO 证明现有 VLA 在标准 LIBERO 上 >90%，加扰动后崩到 0.0%，原文指出这暴露"模型对动作序列与场景布局的死记硬背"。**证据强度：强。**
+(a) The external credibility of simulated numbers is capped by the sim2real gap — RoboArena's paper criticises centralised sim-only leaderboards for systematically understating real-world performance. (b) Internal benchmarks get optimised until they stop carrying signal (Goodhart's law). (c) LIBERO-PRO shows existing VLAs above 90% on standard LIBERO collapsing to 0.0% under perturbation, which the authors attribute to rote memorisation of action sequences and scene layouts. **Evidence: strong.**
 
-### R4【中×中】算力/成本超出可承受范围
+### R4 [medium × medium] Compute cost exceeds what the team can absorb
 
-见 B 节。**证据强度：强。**
+See section B. **Evidence: strong.**
 
-### R5【中×中】许可证陷阱在商业化时引爆
+### R5 [medium × medium] A licensing trap detonates at commercialisation
 
-见 C 节。**证据强度：强。**
+See section C. **Evidence: strong.**
 
-### R6【低×高】跨本体评测方法学根本不成立
+### R6 [low × high] Cross-embodiment evaluation is not methodologically sound
 
-学术界普遍承认 cross-embodiment 公平比较尚未解决，动作/观测空间无法统一转换时（CrossFormer 明确其贡献恰恰是处理这个问题）。**证据强度：中。**
+The field broadly accepts that fair cross-embodiment comparison is unsolved when action and observation spaces cannot be cast into a common format — CrossFormer's stated contribution is precisely handling that. **Evidence: medium.**
 
-### R7【低×中】统计功效不足，数字没有区分力
+### R7 [low × medium] Insufficient statistical power leaves numbers unable to discriminate
 
-NVIDIA 自己的分析（RoboLab 平台）：观察到 90% 成功率、仅 70 次 rollout 时，95% Clopper-Pearson 置信区间宽达 15.4 个百分点（80.5%–95.9%）；要收窄到 ±2 点（88.0%–91.8%）需约 1,030 次 rollout。**证据强度：强。**
+NVIDIA's own analysis on the RoboLab platform: at an observed 90% success rate over just 70 rollouts, the 95% Clopper–Pearson interval spans 15.4 points (80.5%–95.9%); narrowing to ±2 points (88.0%–91.8%) requires roughly 1,030 rollouts. **Evidence: strong.**
 
-## A. 根本性质疑：sim eval 的价值到底有多大？
+## A. How much is sim eval actually worth?
 
-**发现 1：sim2real 相关性"能排序、不能替代"，且强相关只在窄设置下成立。** SimplerEnv（arXiv:2405.05941）Table I："Visual Matching"在 Google Robot 任务上 Pearson r 平均 0.924、MMRV 0.056，其中 Pick Coke Can r=0.976。但关键反证：AutoEval 明确指出"sim 与真机的 gap 会让不同策略受影响程度不同，导致 sim 与真机的策略排序不一致"。
+**Finding 1: sim2real correlation supports ranking, not replacement, and only holds under narrow settings.** SimplerEnv (arXiv:2405.05941) Table I reports Visual Matching averaging Pearson r = 0.924 with MMRV 0.056 on Google Robot tasks, and r = 0.976 on Pick Coke Can. The counterpoint matters: AutoEval states plainly that the sim-real gap affects different policies differently, producing inconsistent rankings between simulation and hardware.
 
-**发现 2：头部实验室以真机为黄金标准。** AutoEval 论文开篇即称"人跑的真机评测是大多数先前工作使用的黄金标准"。TRI 公开发表《Statistical Thinking for Robot Policy Evaluation》，在其 Large Behavior Models 论文中采用真机 A/B + STEP 序贯检验。
+**Finding 2: leading labs treat hardware as the gold standard.** AutoEval opens by describing human-run real evaluation as the gold standard used by most prior work. TRI published *Statistical Thinking for Robot Policy Evaluation* and used real-hardware A/B testing with STEP sequential tests in its Large Behavior Models work.
 
-**发现 3：有分量的反方立场明确存在。** RoboArena（含 Physical Intelligence 作者）主张分布式真机评测；RobotArena ∞、PhAIL、VLA-REPLICA、AutoEval 等一批 2025–2026 工作都以"真机 / real2sim translation"为主路径。
+**Finding 3: there is a serious opposing camp.** RoboArena — with Physical Intelligence authors among them — argues for distributed real-hardware evaluation. RobotArena ∞, PhAIL, VLA-REPLICA, and AutoEval all take real hardware or real-to-sim translation as the primary path.
 
-**发现 4（重要平衡）：neural simulator / world model 路线的相关性数字反而更高。** RoboWorld（arXiv:2607.01060）报告与 RoboArena 榜单跨 8 个策略 Pearson r=0.989、Spearman ρ=0.970，且在其神经模拟器中复现 RoboArena benchmark 仅需 100 H100 GPU 小时。
+**Finding 4 (an important counterweight): neural simulator and world-model approaches report *higher* correlations.** RoboWorld (arXiv:2607.01060) reports Pearson r = 0.989 and Spearman ρ = 0.970 against the RoboArena leaderboard across eight policies, reproducing the RoboArena benchmark inside its neural simulator for about 100 H100 GPU-hours.
 
-## B. 成本与算力经济性
+## B. Compute economics
 
-**硬件门槛（强证据）**：Isaac Sim 5.0 官方系统要求明确"没有 RT Core 的 GPU（A100、H100）不受支持"——这一条极关键：最便宜的数据中心 A100/H100 实例**不能**用于 Isaac 的渲染式评测。最低 GeForce RTX 4080（16GB），Ideal=RTX PRO 6000 Blackwell（48GB）。
+**Hardware floor (strong).** Isaac Sim 5.0's requirements state that GPUs without RT cores — A100 and H100 explicitly — are unsupported. This matters: the cheapest datacentre instances **cannot** run Isaac's rendering-based evaluation. The floor is a GeForce RTX 4080 (16GB); the ideal is an RTX PRO 6000 Blackwell (48GB).
 
-**4096 并行的真实配置**：NVIDIA/Lightwheel 用 8× RTX 6000D GPU，跑 RoboCasa 10 个任务、GR00T N1.5、200 步 rollout，声称最高 13.5× 加速。
+**What 4,096-parallel actually costs.** NVIDIA and Lightwheel use 8× RTX 6000D to run 10 RoboCasa tasks with GR00T N1.5 over 200-step rollouts, claiming up to 13.5× speedup.
 
-**采购成本**：RTX 6000 Ada 单卡街价约 7,159–7,998 美元；RTX PRO 6000 Blackwell 因 GDDR7 短缺，NVIDIA 官方 2026 年 6 月从发布价 8,565 美元涨到 13,250 美元。Lightwheel 用的 RTX 6000D 报道价 6,500–8,000 美元/卡——8 卡仅 GPU 就约 5.2 万–6.4 万美元。
+**Purchase cost.** RTX 6000 Ada street price runs about $7,159–$7,998. The RTX PRO 6000 Blackwell rose from an $8,565 launch price to $13,250 by June 2026 amid GDDR7 shortages. The RTX 6000D used by Lightwheel is reported at $6,500–$8,000 per card — so eight cards alone come to roughly $52,000–$64,000.
 
-**云端小时价**：RTX 6000 Ada 约 0.77–1.32 美元/GPU 小时；RTX PRO 6000 Blackwell 约 1.29–2.98 美元/GPU 小时；RTX 4090 约 0.41–0.50 美元。AWS G7e 8 卡 33.14 美元/小时。
+**Cloud hourly rates.** RTX 6000 Ada runs about $0.77–$1.32 per GPU-hour; RTX PRO 6000 Blackwell about $1.29–$2.98; RTX 4090 about $0.41–$0.50. AWS G7e with eight cards is $33.14 per hour.
 
-**MuJoCo/MJX 对比**：Robotics Center of Silicon Valley（2026 年 4 月）直接对比："MuJoCo 能在 1,500 美元的笔记本上跑；Isaac Sim 实际需要工作站级 GPU，硬件成本推到每席位 3,000–15,000 美元。" MuJoCo-Warp 在 RTX 4090 上对 manipulation 号称比 MJX 快 313×、locomotion 快 152×。
+**MuJoCo comparison.** The Robotics Center of Silicon Valley (April 2026) puts it directly: MuJoCo runs on a $1,500 laptop, while Isaac Sim realistically needs a workstation-class GPU, pushing hardware cost to $3,000–$15,000 per seat. MuJoCo-Warp is reported at 313× faster than MJX for manipulation and 152× for locomotion on an RTX 4090.
 
-## C. 许可证与法律风险
+## C. Licensing and legal exposure
 
-- **Isaac Sim / Omniverse**：源码 Apache 2.0，内部 R&D 免费。但运行/构建依赖的 Omniverse Kit SDK 在"作为应用再分发给第三方"或"作为服务交付给第三方"时触发 NVIDIA AI Enterprise / Omniverse Enterprise 授权。
-- **Isaac Lab / Isaac Lab-Arena**：均 Apache 2.0，但都依赖 Isaac Sim（含专有条款组件）。
-- **Isaac GR00T**：N1/N1.5 为非商用许可；**N1.7 起转 Apache 2.0 可商用**。
-- **Genie Sim**：`source/geniesim_*` 与 `source/data_collection` 为 MPL 2.0（文件级 copyleft）；`source/scene_reconstruction` 含多种许可。
-- **RoboCasa/LIBERO 等第三方资产的再分发限制**：未能取得确证，建议单独审计。
+- **Isaac Sim / Omniverse**: source is Apache 2.0 and internal R&D is free, but the Omniverse Kit SDK it depends on triggers NVIDIA AI Enterprise or Omniverse Enterprise licensing when redistributed as an application to third parties or delivered as a service.
+- **Isaac Lab / Isaac Lab-Arena**: both Apache 2.0, but both depend on Isaac Sim and its proprietary components.
+- **Isaac GR00T**: N1 and N1.5 are non-commercial; **N1.7 onward is Apache 2.0 and commercially usable**.
+- **Genie Sim**: `source/geniesim_*` and `source/data_collection` are MPL 2.0 (file-level copyleft); `source/scene_reconstruction` carries mixed licences.
+- **Third-party asset redistribution in RoboCasa, LIBERO and similar**: no confirmation found; a separate audit is advisable.
 
-## D. Isaac 生态的 churn 风险
+## D. Isaac ecosystem churn
 
-- **历史迁移记录**：见 R2。
-- **Newton 的冲击**：Newton 已进入 Isaac Lab，底层从 PhysX 向 Newton 迁移。Linux Journal 明确"项目仍处 alpha/早期，预期不稳定，API 会快速演进"。
-- **反面对比**：MuJoCo 由 DeepMind 维护、Apache 2.0、`pip install` 即用、生态学术优先，稳定性显著优于 Isaac。
+- **Migration history**: see R2.
+- **Newton's arrival**: Newton has entered Isaac Lab, moving the base from PhysX. Linux Journal notes the project remains in alpha, with instability expected and APIs evolving quickly.
+- **The counterexample**: MuJoCo is maintained by DeepMind, Apache 2.0, installable with pip, and academically oriented — markedly more stable than Isaac.
 
-## E. 被拒绝的替代方案是否被低估
+## E. Underestimated alternatives
 
-1. **纯 MuJoCo/MJX + ManiSkill3（跳过 Isaac）——被低估，建议作为第一阶段主路径。** 必须用 Isaac 的场景其实很窄：大规模并行人形全身控制 + 需要 RTX 光追级视觉观测的任务。
-2. **LeRobot-only 路线——中等推荐。** 已封装 LIBERO、Meta-World 等，`lerobot-eval` 一行评测，Arena 已作为可选后端接入 EnvHub。
-3. **Real-eval-first（AutoEval 式自动化真机台）——针对"公信力"诉求可能才是最优。** AutoEval 用微调的 VLM success classifier + reset policy，24/7 真机自动评测，与人工评测高相关、省 >99% 人力。
-4. **World model as evaluator——潜力最大但尚不成熟到做主路径。** RoboWorld（r=0.989）、WorldEval、GigaWorld-1/WMBench 显示相关性极高、成本可控，但 GigaWorld-1 自述"什么属性让 world model 可靠仍理解不足"。
-5. **完全不自建、只打外部榜——对小团队 ROI 可能最高。**
-6. **与平台方共建**——Arena 明确邀请社区在其 core 上发布 benchmark，对"建立技术影响力"是更高杠杆的路径。
+1. **Pure MuJoCo/MJX + ManiSkill3, skipping Isaac entirely — underestimated; recommended as the first-phase main path.** The cases genuinely requiring Isaac are narrow: large-scale parallel humanoid whole-body control, and tasks needing RTX ray-traced visual observation.
+2. **LeRobot-only — moderately recommended.** It already wraps LIBERO and Meta-World with one-line `lerobot-eval`, and Arena is available as an optional backend through EnvHub.
+3. **Real-eval-first (an AutoEval-style automated hardware rig) — possibly optimal for the credibility goal.** AutoEval combines a fine-tuned VLM success classifier with a reset policy for 24/7 autonomous evaluation, correlating well with human evaluation while saving over 99% of the effort.
+4. **World model as evaluator — highest potential, not yet ready as a main path.** RoboWorld (r = 0.989), WorldEval, and GigaWorld-1/WMBench all show strong correlation at manageable cost, but GigaWorld-1 itself notes that what makes a world model reliable remains poorly understood.
+5. **Skip building entirely and compete on external leaderboards — possibly the best ROI for a small team.**
+6. **Co-develop with a platform vendor.** Arena explicitly invites the community to publish benchmarks on its core, which is higher leverage for building technical influence.
 
-## F. 团队规模与工程现实性
+## F. Engineering realism for a small team
 
-- **Isaac 运维负担**：安装/驱动/容器故障在社区高发且跨版本长期存在。MuJoCo 对比是"10 分钟 pip 装好"。
-- **新机器人接入耗时**：未找到公开的精确人天数字。定性证据强烈支持"每个新机器人多日到多周"：URDF→USD 仅机械导入官方教程标称 10–20 分钟，但 actuator 建模（ImplicitActuator vs DCMotor，stiffness/damping 反复调而"无法稳定"，见 IsaacLab Discussion #3789）、sim2real 延迟/阻抗匹配、新 URDF importer 的 ghost/duplicate collision bug 都是耗时黑洞。**精确工期无一手数字，属推测偏中等。**
+- **Isaac's operational burden**: installation, driver, and container failures recur across versions. MuJoCo is ten minutes with pip.
+- **Time to onboard a new robot**: no public figures found. Qualitative evidence strongly suggests days to weeks per robot — mechanical URDF→USD import is documented at 10–20 minutes, but actuator modelling (ImplicitActuator versus DCMotor, stiffness and damping tuned repeatedly without stabilising, per IsaacLab Discussion #3789), sim2real latency and impedance matching, and known ghost/duplicate collision bugs in the new URDF importer are all sinks. **No first-hand timings; this is a medium-confidence inference.**
 
-## G. 评测方法学的更深问题
+## G. Deeper methodological problems
 
-- **统计功效**：见 R7。RoboLab benchmark 承认 N=10 时单任务 CI 在 p=0.5 附近约 ±30%。
-- **多重比较**：TRI 的《Statistical Thinking》推荐校正的成对检验 + Compact Letter Display + Bayesian beta-posterior violin，并明确警告"两个置信区间大幅重叠时仍可能通过直接假设检验被统计区分开"——即**不要用"CI 重叠"来判断"无显著差异"**。
-- **Goodhart / 过拟合**：LIBERO-PRO（>90%→0.0%）、LIBERO-Plus（7 维 21 子维扰动）、vla-eval（14 benchmark、657 榜单项的复现陷阱）是必读的失败案例。
-- **可复现性基础设施**：SureSim 提出用少量真机配对校正大规模 sim 偏差（prediction-powered inference）给出置信区间。
-- **跨本体**：CrossFormer 明确其贡献恰恰是处理"无法转换到统一格式"的观测/动作空间；RL-ViGen 报告"没有算法能处理 cross-embodiment 泛化"。
+- **Statistical power**: see R7. RoboLab acknowledges that at N = 10, per-task CIs near p = 0.5 span roughly ±30%.
+- **Multiple comparisons**: TRI's *Statistical Thinking* recommends corrected pairwise tests, compact letter displays, and Bayesian beta-posterior violin plots, and warns explicitly that two heavily overlapping confidence intervals can still be separated by a direct hypothesis test — **overlapping CIs do not establish "no significant difference."**
+- **Goodhart and overfitting**: LIBERO-PRO (>90% → 0.0%), LIBERO-Plus (7 dimensions across 21 sub-dimensions), and vla-eval (reproduction traps across 14 benchmarks and 657 leaderboard entries) are the required reading.
+- **Reproducibility infrastructure**: SureSim proposes correcting large-scale simulated bias with a small number of paired real trials via prediction-powered inference, yielding proper confidence intervals.
+- **Cross-embodiment**: CrossFormer's contribution is precisely handling observation and action spaces that cannot be cast to a common format; RL-ViGen reports that no algorithm handles cross-embodiment generalisation.
 
-## H. "被大家认可"的非技术面
+## H. The non-technical side of credibility
 
-未找到机器人领域专门文献，但可推：(a) 与真机的可验证相关性；(b) 统计严谨；(c) 防过拟合的扰动分层；(d) 可复现。对小团队，**打公开真机榜 + 向被采纳的社区框架贡献 benchmark** 的 ROI 高于自建内部 sim 榜。
+No robotics-specific literature was found, but the requirements can be inferred: verifiable correlation with hardware; statistical rigour; perturbation tiers against overfitting; and reproducibility. For a small team, **competing on public hardware leaderboards and contributing benchmarks to an adopted community framework** offers better ROI than building an internal simulated leaderboard.
 
-## I. 多本体与 WAM 评测的特殊难点
+## I. Multi-embodiment and WAM evaluation
 
-- **ALOHA 桌面双臂 vs G1 人形全身控制**：动作空间差异巨大，cross-embodiment 公平比较尚未解决。**本质上更接近"需要两套评测协议"。**
-- **World Action Model 评测**：当模型需要 rollout world model 或输出 latent action 时，现有 obs→action chunk 范式部分够用，但评测指标要换成 EWMBench、WMBench 这类专用基准。
-- **传统方法 vs 学习方法同台**：运动规划通常需要 privileged state 而 VLA 只吃图像，比的是"整条 pipeline"而非"同等信息下的策略"，需在报告中显式说明。
+- **ALOHA tabletop versus G1 whole-body**: the action spaces differ enormously and fair cross-embodiment comparison is unsolved. **This is closer to needing two evaluation protocols than one.**
+- **World action models**: where a model rolls out a world model or emits latent actions, the obs→action-chunk paradigm partly suffices, but the metrics need to change to specialised benchmarks such as EWMBench or WMBench.
+- **Classical versus learned methods on one benchmark**: motion planning typically needs privileged state while VLAs consume only images, so the comparison is between pipelines rather than between policies given equal information. This must be stated explicitly in any report.
 
-## J. 时机判断
+## J. Timing
 
-- **正在形成的统一标准**：LeRobot EnvHub 已整合 Isaac Lab-Arena，NVIDIA 在 Arena core 上聚合 NIST、GR00T Industrial、DexBench、RoboLab 等。**Arena + LeRobot EnvHub 很可能成为事实标准的评测编排层。**
-- **现在动手 vs 等 6 个月**：Isaac Lab-Arena pre-alpha + Newton alpha，现在深度绑定 Isaac 的机会成本高；而 MuJoCo/LeRobot 部分现在就稳定可用。
+- **A standard is forming**: LeRobot EnvHub has integrated Isaac Lab-Arena, and NVIDIA is aggregating NIST, GR00T Industrial, DexBench, and RoboLab onto the Arena core. **Arena plus LeRobot EnvHub looks likely to become the de facto orchestration layer.**
+- **Now versus six months from now**: Isaac Lab-Arena is pre-alpha and Newton is alpha, so deep coupling to Isaac carries high opportunity cost, while the MuJoCo and LeRobot parts are stable today.
 
-## 修改建议
+## Recommended changes
 
-### 必须改
-1. **把 Isaac/Arena 从"第一天的地基"降级为"第二阶段按需后端"。**
-2. **补一份预算表 + 许可证审计。**
-3. **把"外部公信力"的获取路径写清楚，并加入真机评测。**
-4. **统计方法学显式化**：Clopper-Pearson CI + 校正成对检验；不要用"CI 重叠"判断"无显著差异"。
-5. **policy 协议层预留非 obs→action 的模型形态**（latent action / world-model rollout）。
+### Must fix
+1. **Demote Isaac/Arena from day-one foundation to a second-phase, on-demand backend.**
+2. **Produce a budget and a licence audit.**
+3. **Spell out how external credibility will be earned, and include real-hardware evaluation.**
+4. **Make the statistics explicit**: Clopper–Pearson intervals and corrected pairwise tests; never infer "no difference" from overlapping CIs.
+5. **Leave room in the policy protocol for models that are not obs→action** (latent actions, world-model rollouts).
 
-### 建议改
-6. 优先复用 LeRobot 作为编排层。
-7. ALOHA 与 G1 分两套评测协议。
-8. cross-embodiment 与 privileged state 公平性在报告模板里显式标注。
-9. 把 SureSim 式 real2sim 配对校正纳入。
-10. Isaac 若最终引入，pin 版本 + 容器化 + 明确迁移预算。
+### Should fix
+6. Prefer LeRobot as the orchestration layer.
+7. Give ALOHA and G1 separate evaluation protocols.
+8. Flag cross-embodiment and privileged-state fairness explicitly in the report template.
+9. Adopt SureSim-style paired real2sim correction.
+10. If Isaac is adopted, pin versions, containerise, and budget for migration.
 
-## 证据强度总表
+## Evidence strength
 
-| 结论 | 证据强度 |
+| Conclusion | Strength |
 |---|---|
-| sim eval 能排序、不能替代真机 | 强 |
-| SimplerEnv Visual Matching r≈0.924 是合理锚点 | 强 |
-| LIBERO 类 benchmark 存在严重记忆过拟合 | 强 |
-| Isaac Sim 强制 RTX 核心 GPU；4096 并行需 8× RTX 6000D | 强 |
-| Isaac 生态有反复 churn 史；Arena pre-alpha、Newton alpha | 强 |
-| Omniverse Kit 再分发触发企业授权；GR00T≤N1.6 非商用 | 强 |
-| 统计功效：70 rollout 时 90% 成功率 CI 宽 15.4 点 | 强 |
-| MuJoCo/MJX TCO 比 Isaac 低一个数量级 | 强 |
-| World model evaluator 相关性高但未成熟 | 中 |
-| cross-embodiment 公平比较未解决 | 中 |
-| 新机器人接入 Isaac 需多日–多周 | 中（无一手工期） |
-| 第三方资产再分发限制 | 无充分证据 |
+| Sim eval ranks but does not replace hardware | strong |
+| SimplerEnv Visual Matching r ≈ 0.924 is a reasonable anchor | strong |
+| LIBERO-class benchmarks suffer serious memorisation overfitting | strong |
+| Isaac Sim requires RT-core GPUs; 4,096-parallel needs 8× RTX 6000D | strong |
+| Isaac has repeatedly churned; Arena is pre-alpha, Newton alpha | strong |
+| Omniverse Kit redistribution triggers enterprise licensing; GR00T ≤N1.6 non-commercial | strong |
+| At 70 rollouts, a 90% success rate carries a 15.4-point CI | strong |
+| MuJoCo/MJX TCO is an order of magnitude below Isaac | strong |
+| World-model evaluators correlate well but are immature | medium |
+| Fair cross-embodiment comparison is unsolved | medium |
+| Onboarding a robot to Isaac takes days to weeks | medium (no first-hand timings) |
+| Third-party asset redistribution limits | no adequate evidence |
 
-## 一句话总结
+## In one line
 
-方案的**思想是对的**（薄层、复用、防过拟合、real2sim 锚点），但**执行顺序和风险定价**需要重新审视：它把最贵、最不稳、最难运维的 Isaac 当地基，又把"被认可"寄托在天花板受 sim2real gap 限制的纯 sim 数字上。
+The plan's **thinking is right** — thin layer, reuse, anti-overfitting, real2sim anchoring — but its **sequencing and risk pricing need revisiting**: it makes the most expensive, least stable, hardest-to-operate component the foundation, and stakes credibility on simulated numbers whose ceiling is set by the sim2real gap.

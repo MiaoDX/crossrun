@@ -2,93 +2,67 @@
 
 **One protocol. Any robot, any policy, any backend. Sim and real.**
 
-A reference design for running and evaluating robot policies — rethought from scratch, at a moment when the community finally has the pieces to do it properly.
+A reference design for running and evaluating robot policies. The interesting part is not another benchmark — it is the layer that lets the same policy run, unchanged, in simulation and on hardware.
 
-> **Status: design phase.** The architecture is written down; the code is not there yet.
-> See [`docs/plan.md`](docs/plan.md) for the full design, and [`docs/research/`](docs/research/) for the survey work behind it.
+> **Status: design phase.** The architecture is written down. The code is not there yet.
 
----
+## The idea
+
+Robot policy evaluation has no shortage of benchmarks, several good simulators, and by now a settled pattern for serving models. What is missing is the piece in the middle: the thing that owns an episode.
+
+Models infer. Environments simulate. Somebody still has to decide when an episode begins, whether it succeeded, and what happens between two steps. In simulation all of that is free — `env.reset()`, a success predicate, stepped time. On hardware none of it is.
+
+crossrun is that middle piece.
+
+```
+ policy providers     one model each         a whole zoo
+                      π0.5 · OpenVLA         ╔══════════════════╗
+                      · your own             ║ XPolicyLab (40+) ║
+                             │               ╚═════════╤════════╝
+                             └────────┬────────────────┘
+                                      │  obs update · predict
+                                      │  · reset · batched
+                                      ▼
+ ⭐ runner             SimRunner               RealRunner
+                      reset:   env            reset:   learned / manual
+                      success: predicate      success: VLM classifier
+                      safe:    always         safe:    limits + motors
+                      time:    stepped        time:    wall-clock
+                                      │
+                                      ▼
+ backends             MuJoCo · Isaac Lab-Arena · Genie Sim · real hardware
+```
+
+**We adopt XPolicyLab's protocol instead of inventing one.** It already serves 40+ policies with per-model dependency isolation. Reinventing that would be exactly the mistake this project argues against. What nobody has built — including XPolicyLab itself, whose companion benchmark keeps the simulation client separate — is the execution layer.
+
+Sim and real differ in precisely three ways: where reset comes from, where success comes from, and how time flows. crossrun names them rather than abstracting them away. That is the whole trick.
 
 ## Why now
 
-Robot policy evaluation is in a strange state. There are dozens of benchmarks, several excellent simulators, a handful of serious policy-serving frameworks — and almost no agreement on how the pieces should fit together. Most teams either haven't invested yet, or invested years ago and now carry the architecture they started with.
-
-2026 happens to be a good moment to redo this:
-
-- **Policy serving has converged on a pattern.** Client–server inference over a socket, one process per model, is now how everyone does it.
+- **Policy serving has converged.** Client–server inference over a socket, one process per model, is now how everyone does it.
 - **The physics layer is consolidating.** Isaac Lab is moving to Newton, whose primary backend is MuJoCo-Warp. Accuracy and throughput are no longer opposed.
 - **Evaluation methodology has caught up.** Perturbation tiers, confidence intervals, and real-to-sim correlation checks are established practice — just not yet standard practice.
 
-None of this is our invention. The contribution here is putting it together cleanly, and being explicit about what the pieces are.
-
-## What this is
-
-A thin, opinionated middle layer — plus the demos that argue for it.
-
-```
- policy providers    one model each        a whole zoo
-                     π0.5 · OpenVLA        ╔═════════════════╗
-                     · your own            ║ XPolicyLab (40+)║
-                            │              ╚════════╤════════╝
-                            └───────┬───────────────┘
-                                    │  4 ops: obs update · predict
-                                    │         · reset · batched
-                                    ▼
- protocol            strong schema, obs key mapping, action-space tagging
-                                    │
-                                    ▼
- ⭐ runner            SimRunner              RealRunner
-                     reset:   env           reset:   learned / manual
-                     success: predicate     success: VLM classifier
-                     safe:    always        safe:    limits + motors
-                     time:    stepped       time:    wall-clock
-                                    │
-                                    ▼
- backends            MuJoCo · Isaac Lab-Arena · Genie Sim · real hardware
-```
-
-Two things are worth pointing out in that picture.
-
-**XPolicyLab is not a model.** It is a policy-serving framework that already hosts 40+ policies, so it plugs in as a *source of many* rather than as one more container. Its four-operation interface is also where our protocol contract comes from — but the protocol stays ours, because it has to carry things XPolicyLab wasn't built for (SONIC's 78-dim latent tokens, Arena's own policy convention).
-
-**The runner is the part worth stealing.** It is what makes "the same policy, the same protocol, in simulation and on hardware" a fact rather than a slogan.
-
-## Design theses
-
-Each of these should show up in the code and be defended by a demo:
-
-1. **Protocol before implementation.** Models and simulators are both replaceable.
-2. **Models do not live in this repo.** One container per model — or one bridge for a whole zoo; we hold only the contract.
-3. **Backends need not be compatible with each other** — only with the protocol.
-4. **The default path must be frictionless.** Heavy backends are opt-in, always.
-5. **Numbers ship with uncertainty.** A bare success rate is a bug.
-6. **A high score under the standard protocol means little.** Perturbation tiers are not optional.
-7. **Across backends, compare rankings — never absolute numbers.**
-8. **Something must sit between models and environments.** Models infer, environments simulate; somebody has to own the episode.
-9. **Name the sim/real differences, don't abstract them away.** There are exactly three: where reset comes from, where success comes from, how time flows.
+None of this is our invention. The contribution is assembling it cleanly and being explicit about the seams.
 
 ## Planned demos
 
-The architecture is an argument, and arguments need evidence. All three run on LIBERO + MuJoCo with public checkpoints:
+An architecture is an argument, and arguments need evidence. All three run on LIBERO + MuJoCo with public checkpoints:
 
-1. **How much does the protocol move the number?** Same checkpoint, varying episode counts, seeds, and perturbation tiers. Official protocols use 3 seeds × 500 rollouts; community reproductions often use 10 episodes. At 70 rollouts, a 95% CI is ~15 points wide.
-2. **Rankings disagree across backends.** Same policies, different order on MuJoCo vs Isaac. If this *doesn't* happen, that is also worth knowing.
-3. **90% → 0%.** A model that scores above 90% under the standard protocol, collapsing under position perturbation.
+1. **How much does the protocol move the number?** Same checkpoint, varying episode counts, seeds, and perturbation tiers. At 70 rollouts a 95% CI is roughly 15 points wide; official protocols use 3 seeds × 500 rollouts, community reproductions often use 10 episodes.
+2. **Rankings disagree across backends.** Same policies, different order on MuJoCo versus Isaac. If this *doesn't* happen, that is worth knowing too.
+3. **90% → 0%.** A model scoring above 90% under the standard protocol, collapsing under position perturbation.
 
 ## Scope
 
-Deliberately small at first: **LIBERO / ALOHA on MuJoCo, one VLA and one world-action model.** That is enough to demonstrate every thesis above.
+Small on purpose: **LIBERO / ALOHA on MuJoCo, one VLA and one world-action model.** Enough to demonstrate every design claim.
 
-Extensibility gets proven afterwards, not assumed: **Unitree G1** with whole-body control on Isaac Lab-Arena, and **AgiBot G2** via Genie Sim assets.
+Extensibility gets proven afterwards, not assumed: **Unitree G1** with whole-body control on Isaac Lab-Arena, and **AgiBot G2** through Genie Sim assets.
 
-## Documentation
+## Docs
 
-| | |
-|---|---|
-| [`docs/plan.md`](docs/plan.md) | Full design: architecture, evaluation protocol, phases, risks, rejected alternatives |
-| [`docs/research/`](docs/research/) | The surveys this design came out of — ecosystem landscape, an adversarial review of an earlier draft, and a build-vs-adopt study of humanoid frameworks |
-
-Design docs are currently written in Chinese; translations are welcome.
+- [`docs/plan.md`](docs/plan.md) — full design: architecture, evaluation protocol, phases, risks, and the alternatives we rejected
+- [`docs/research/`](docs/research/) — the surveys behind it, including the parts that turned out wrong
 
 ## License
 
