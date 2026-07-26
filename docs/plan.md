@@ -1,24 +1,23 @@
-# crossrun — Design Document v2.3
+# crossrun — Design Document v2.4
 
 > **What this is**: an open-source reference design for running and evaluating robot policies in simulation and on hardware.
 > **Status**: design phase. The architecture is under validation; code has not started.
 > **Companion research**: see [`research/`](research/).
 
-**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as the default policy-side integration. **v2.3 corrects several over-strong assumptions, adds an explicit Runner-to-Backend contract, and treats protocol coverage, sim/real symmetry, and cross-backend comparability as hypotheses to test rather than settled facts.**
+**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit Runner-to-Backend contract. **v2.4 chooses one default policy runtime boundary: every production policy is served through a pinned XPolicyLab-compatible service, while original model runtimes and checkpoints may remain intact. It also adds ALOHA Sim beside LIBERO/Panda as a Phase-0 path and defines LeRobot's roles explicitly.**
 
 ---
 
 ## 1. Positioning
 
-**In one line:** define a small execution layer that owns robot-policy episodes while keeping policy serving, environments, statistics, and hardware integration behind explicit boundaries.
+**In one line:** define a small execution layer that owns robot-policy episodes while every policy runs behind one versioned service boundary and every environment sits behind a backend contract.
 
-The project is not another simulator, benchmark, model zoo, or public protocol specification. Its value is a reference implementation of the seams between those systems, plus experiments that show where the seams hold and where they leak.
+The project is not another simulator, benchmark, model zoo, training framework, or public policy protocol. Its value is:
 
-Three ecosystem trends make the experiment timely without making it inevitable:
-
-- Isolated client-server policy inference is increasingly common because it separates model dependencies and permits remote deployment. It is not universal; in-process inference remains valid.
-- GPU-native physics systems such as Newton and MuJoCo-Warp are maturing. Throughput is promising, while contact behaviour, feature coverage, and migration stability still require measurement.
-- Perturbation tests, uncertainty intervals, provenance, and real-to-sim checks are available evaluation practices, but are not consistently applied.
+1. one episode state machine for simulation and hardware;
+2. one policy-service boundary for heterogeneous upstream runtimes;
+3. explicit compatibility metadata between a checkpoint and a backend;
+4. evaluation records that preserve uncertainty and provenance.
 
 **Deliverables, in priority order:**
 
@@ -26,141 +25,270 @@ Three ecosystem trends make the experiment timely without making it inevitable:
 2. Reproducible demos that support or falsify the design claims.
 3. A working evaluator that carries the first two.
 
-**Success looks like:** someone clones the project, runs a known public baseline, sees exactly which assumptions were made, and can replace either the policy provider or environment backend without editing the episode logic.
+**Success looks like:** someone can select an upstream checkpoint, launch it through the pinned policy-service profile, run a compatible simulation or robot backend, and see exactly which transformations and assumptions produced the result.
 
 ---
 
-## 2. What we build and what we adopt
+## 2. Runtime decision
 
-| Layer | Decision | Confidence |
-|---|---|---|
-| **Model implementations** | Adopt upstream implementations and checkpoints | High; rebuilding models adds no value here |
-| **Model packaging** | Adopt containers or isolated environments | High as a pattern, not as a single required tool |
-| **Policy-facing interface** | Start with a pinned XPolicyLab adapter | Candidate; coverage and operational semantics must be measured |
-| **Execution layer** | Build | Core contribution |
-| **Backend interface** | Build a narrow internal contract | Required to make simulator independence real |
-| **Simulators and robot drivers** | Adopt | High; expose them through backend adapters |
-| **Task suites** | Adopt, beginning with LIBERO | High; comparability depends on preserving task and embodiment definitions |
-| **Evaluation statistics** | Build a small implementation around established methods | High; methods are known, metadata discipline is usually missing |
+### 2.1 One default policy runtime
 
-### 2.1 XPolicyLab is a dependency behind an adapter
+All production policy execution goes through a **pinned XPolicyLab-compatible service**.
 
-XPolicyLab currently exposes a model lifecycle that includes observation updates, single and batched action queries, and policy reset. crossrun will pin the exact revision it consumes and record the concrete method and message shapes in a **consumption profile**.
+This is a runtime and serving decision, not a weight-format decision. A policy integration may keep:
 
-That profile is not advertised as a competing standard. It exists so crossrun can:
+- the original repository and inference code;
+- the original checkpoint format;
+- the original Python/CUDA/dependency environment;
+- the original tokenizer, normalisation statistics, action decoder, memory system, or planner.
+
+The model-specific adapter translates between the upstream runtime and the consumed service profile.
+
+```text
+ upstream model repository
+ + original checkpoint
+ + model-specific dependencies
+             │
+             │ XPolicyLab model adapter
+             │ observation/action transforms
+             ▼
+ pinned XPolicyLab-compatible service
+             │
+             │ crossrun XPolicyLabPolicyClient
+             ▼
+           Runner
+```
+
+The rule is therefore:
+
+> **Unify executable policy lifecycle and metadata; do not require universal checkpoint conversion.**
+
+### 2.2 Why XPolicyLab is the default
+
+The project begins with many heterogeneous checkpoints from different repositories. They may require incompatible Python, CUDA, Transformers, simulator, C++ or system dependencies. XPolicyLab's model-per-environment and client-server structure is a better match for this intake problem than requiring every model to be reimplemented in one process.
+
+Its current strengths are:
+
+- a large and rapidly growing policy adapter catalog;
+- model-side dependency isolation;
+- remote or same-machine serving;
+- observation/action dictionary conventions;
+- single and batched inference lifecycle methods;
+- a contribution path focused on wrapping upstream models.
+
+Its weaknesses remain explicit:
+
+- the interface is young and changing;
+- operational semantics such as timeout, cancellation, backpressure and failure recovery are not fully specified by method names;
+- some stateful policies already need lifecycle extensions beyond the common methods;
+- adapter quality and checkpoint reproducibility vary by policy.
+
+Consequently, crossrun pins a reviewed revision and consumes only a documented subset. Phase 0 starts from a reviewed XPolicyLab revision—initially `061093b45bc1b323ed2ce0e50bfa6eb737858a8e`—and upgrades only through the regression gate in §9.
+
+### 2.3 Consumption profile, not a competing standard
+
+crossrun records the exact XPolicyLab methods and payload shapes it consumes in a versioned internal profile.
+
+```yaml
+profile: crossrun-xpolicylab-v1
+upstream_revision: 061093b45bc1b323ed2ce0e50bfa6eb737858a8e
+
+required_model_lifecycle:
+  - reset
+  - update_obs
+  - get_action
+
+optional_model_lifecycle:
+  - update_obs_batch
+  - get_action_batch
+  - begin_episode
+  - step
+
+crossrun_requirements:
+  - health reporting
+  - declared capabilities
+  - request deadlines
+  - bounded queues
+  - schema and size validation
+  - explicit error categories
+```
+
+The profile is not advertised as an ecosystem protocol. It exists to:
 
 - detect upstream API drift;
-- validate payloads before they reach a model process;
-- map environment observation keys to policy-native inputs;
-- tag action semantics, dimensions, frame, units, and horizon;
-- define timeout, cancellation, retry, and error behaviour that a method signature alone does not specify.
+- make service behaviour testable;
+- keep the Runner independent from XPolicyLab internals;
+- permit a future runtime replacement without rewriting episode logic.
 
-Phase 0 tests whether this boundary supports latent-token action spaces, reset semantics, batched queries, backpressure, and failure recovery. Until those tests pass, the policy interface is a selected default, not a solved layer.
+### 2.4 What happens when a model does not fit
 
-### 2.2 The novelty claim is deliberately narrow
+A model must not hide important semantics inside arbitrary dictionary fields merely to appear compatible.
 
-Many benchmarks already contain evaluation clients and episode loops. The claim here is not that no execution code exists. The narrower claim is:
+Every policy declares capabilities such as:
 
-> We have not found a small, backend-neutral execution layer that exposes one explicit episode lifecycle across simulation and hardware while keeping policy serving and evaluation statistics separate.
+```yaml
+stateful: true
+batching: false
+custom_episode_start: true
+returns_action_chunks: true
+external_decoder: false
+supports_cancellation: false
+planner_latency_class: long
+```
 
-The demos must defend that claim. If an existing project already provides the same boundary cleanly, crossrun should integrate or document it rather than compete with it.
+For a conventional policy, the adapter implements the common observation-update, action-query and reset lifecycle.
+
+For a stateful planner, world-action model, memory policy or multi-stage agent, one of two things happens:
+
+1. map its lifecycle to a documented optional extension such as `begin_episode` and `step`; or
+2. extend the internal service profile after demonstrating that the existing lifecycle loses required semantics.
+
+Failure to fit is evidence about the runtime boundary, not a reason to put model-specific episode logic into the Runner.
 
 ---
 
-## 3. Design claims to test
+## 3. LeRobot's roles
+
+LeRobot is deliberately not selected as the sole policy runtime. It remains a major upstream dependency in three independent roles.
+
+### 3.1 LeRobot-native policy source
+
+LeRobot implements policies through `PreTrainedPolicy`, policy configs and pre/post-processing pipelines. A generic XPolicyLab bridge should load LeRobot-native checkpoints where those conventions are sufficient:
+
+```text
+ LeRobot checkpoint
+ + PreTrainedPolicy implementation
+ + processor pipeline and dataset statistics
+                │
+                ▼
+      XPolicyLabLeRobotModel
+                │
+                ▼
+    XPolicyLab-compatible service
+```
+
+The bridge is generic only at the LeRobot boundary. Individual policies may still require their plugin package and dependencies in the service environment.
+
+A checkpoint from another runtime is not assumed to load directly into the LeRobot implementation of the same model family. For example, an OpenPI checkpoint and a LeRobot-packaged π model may represent related parameters but use different implementation, configuration or packaging. The choices are:
+
+- run the original checkpoint through its original runtime adapter; or
+- use an official or validated conversion and record the converted artifact's lineage.
+
+### 3.2 LeRobot robot backend
+
+LeRobot's `Robot` interface can be adapted as a hardware backend:
+
+```text
+LeRobotRobotBackend
+├── get observation
+├── send action
+├── connection and calibration state
+└── hardware-specific diagnostics
+```
+
+A LeRobot policy does not require a LeRobot robot backend, and a LeRobot robot backend does not require a LeRobot policy.
+
+### 3.3 Dataset and trajectory ecosystem
+
+LeRobotDataset is a candidate interchange format for demonstrations and exported trajectories. Evaluation identity and provenance remain defined by `TrialRecord`; exporting to LeRobotDataset must not discard those fields.
+
+---
+
+## 4. Design claims to test
 
 Each claim must be visible in code and paired with evidence.
 
-1. **Adopt upstream interfaces behind adapters.** An adapter is cheaper to replace than a public specification is to maintain.
-2. **Models do not live in this repo.** The repo holds integration metadata and reference containers, not model implementations or weights.
-3. **The runner has two explicit boundaries.** `PolicyClient` faces the model; `Backend` faces simulation or hardware.
-4. **The default path must be frictionless.** Heavy backends are opt-in.
-5. **Numbers ship with uncertainty and provenance.** A bare success rate is an incomplete result.
-6. **Perturbation evaluation is part of the baseline.** A standard score alone does not establish robustness.
-7. **Cross-backend results are stratified, not pooled.** Report backend-specific outcomes and analyse policy-by-backend interactions.
-8. **Something owns the episode.** Models infer and environments evolve; the runner schedules, terminates, and records.
-9. **Sim and real share a lifecycle, not identical semantics.** Reset source, success assessment, and clock semantics are first-class seams; observation, control, safety, latency, and failure recovery remain backend capabilities.
+1. **One service boundary can federate heterogeneous policy runtimes.** Original weights and dependencies remain isolated behind adapters.
+2. **The runner has two explicit boundaries.** `PolicyClient` faces the service; `Backend` faces simulation or hardware.
+3. **Checkpoint compatibility is metadata, not a model-name guess.** A policy and backend run only after a profile check.
+4. **Models do not live in this repo.** The repo holds contracts, adapters, manifests and reference containers, not model implementations or weights.
+5. **The default path must be reproducible.** Exact upstream revisions, checkpoints, transforms and statistics are pinned.
+6. **Numbers ship with uncertainty and provenance.** A bare success rate is incomplete.
+7. **Perturbation evaluation is part of the baseline.** A standard score alone does not establish robustness.
+8. **Cross-backend results are stratified, not pooled.** Report backend-specific outcomes and analyse interactions.
+9. **Sim and real share a lifecycle, not identical semantics.** Observation, control, safety, latency and recovery remain backend capabilities.
+10. **Runtime escape hatches are evidence-driven.** A direct provider is not added merely because an adapter is inconvenient.
 
 ---
 
-## 4. Baseline snapshot
+## 5. Initial runnable paths
 
-The table below is a dated survey snapshot, not a compatibility guarantee. Every implementation phase must pin exact revisions and reproduce one minimal run before relying on an entry.
+Phase 0 uses two upstream-supported MuJoCo paths. They exercise different policy and embodiment semantics while sharing the same Runner and policy-service boundary.
 
-| Benchmark | Backend | Embodiment | Reported or locally checked models | Checkpoints |
-|---|---|---|---|---|
-| **LIBERO** | robosuite / MuJoCo | **Panda/Franka** | π0, π0.5, OpenVLA, SmolVLA, Diffusion Policy | public |
-| RoboDojo | Isaac Sim | ARX X5 / Piper / Piper X | multiple policies through XPolicyLab | leaderboard |
-| RoboLab | Isaac | benchmark-specific | π0.5, π0-FAST, π0, PaliGemma | varies |
-| RoboTwin | SAPIEN | Aloha-AgileX and others | several | public |
-| SimplerEnv | SAPIEN | Google Robot / WidowX | RT-1, RT-1-X, Octo | public |
-| Genie Sim | Isaac | G2 | GO-2, Pi series, GR00T; locally checked in the July 2026 survey | public assets/checkpoints |
-| Isaac Lab-Arena | Isaac | multiple | GR00T and openpi-family integrations reported | public |
-| SIMPLE | MuJoCo + Isaac | G1, ALOHA, Franka | several VLA/WAM baselines | varies |
-| Genesis | native | multiple | no verified VLA evaluation path found in the survey | none selected |
+| Path | Representative upstream config | Observation/action shape | Primary purpose |
+|---|---|---|---|
+| **LIBERO / Panda** | OpenPI `pi05_libero` or another public LIBERO checkpoint | single-arm state, third-person + wrist images, 7-D relative EEF/gripper action | benchmark reproduction, statistics, perturbations |
+| **ALOHA Sim** | OpenPI `pi0_aloha_sim` | dual-arm state, ALOHA cameras, 14-D joint/gripper action | embodiment variation, 50 Hz control, sim-to-real-shaped lifecycle |
 
-A correlation reported between two benchmark leaderboards is evidence that those particular rankings can agree; it is not proof that the ecosystem is universally comparable. Likewise, failure to reproduce a headline score can come from protocol, software revision, checkpoint, rendering, control, or task-definition drift. Trial metadata must preserve enough information to distinguish them.
+The two paths do **not** share a checkpoint or policy profile. They share:
 
----
+- the XPolicyLab-compatible service lifecycle;
+- the crossrun `PolicyClient`;
+- the Runner state machine;
+- evaluation and provenance infrastructure.
 
-## 5. Backend strategy
+They differ in:
 
-```text
-Default path
-└── LIBERO / Panda / MuJoCo
-    └── public task definitions and checkpoints; minimal dependency surface
+- model/checkpoint;
+- observation keys and cameras;
+- state and action dimensions;
+- action semantics;
+- normalisation statistics;
+- control frequency and chunk execution.
 
-Opt-in paths
-├── Isaac Lab-Arena / G1
-│   └── validate Arena first; integrate GR00T-WBC/SONIC as a separate stack
-└── G2 assets derived from a pinned Genie Sim revision
+This distinction is essential: “same runtime boundary” does not mean “same checkpoint works on every robot.”
 
-Evaluation candidates
-├── a second implementation of a matched task for backend-interaction studies
-└── Genesis, behind a measurable porting and rendering gate
-```
+### 5.1 Baseline snapshot
 
-**Why LIBERO first.** The public evaluation paths and checkpoints target its Panda/Franka embodiment. Calling an ALOHA port “LIBERO” without retraining or validating observation/action compatibility would conflate a task-suite transfer with baseline reproduction.
+The table below is a dated survey snapshot, not a compatibility guarantee.
 
-**Why not make Genesis the default immediately.** A light installation is useful, but the default must have a verified policy-plus-task path. Genesis remains a candidate until a checkpoint, embodiment, rendering path, and task implementation run end to end.
-
-**Why Isaac remains opt-in.** Isaac buys access to embodiments and integrations not available in the default path, but its dependency weight and backend migration churn should be paid only when those capabilities are needed.
+| Ecosystem | Relevant path | crossrun treatment |
+|---|---|---|
+| OpenPI | LIBERO, ALOHA Sim, ALOHA real, DROID | wrap original runtime/checkpoint through XPolicyLab adapters |
+| OpenVLA | LIBERO and other embodiment-specific evaluation paths | wrap original runtime; do not infer ALOHA support from model family alone |
+| OpenVLA-OFT | LIBERO plus ALOHA training/evaluation flows | use original runtime adapter unless a validated native package is selected |
+| LeRobot | native policies, LIBERO env, ALOHA env, robot drivers | generic policy bridge, hardware backend, dataset interchange |
+| XPolicyLab | policy zoo and adapter lifecycle | pinned default service runtime |
+| GR00T / WBC / SONIC | embodiment-specific policy and controller stacks | separate policy/runtime, decoder and backend/controller validation |
 
 ---
 
-## 6. Architecture
+## 6. Architecture and contracts
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ Policy providers                                             │
-│ individual container or XPolicyLab-backed policy zoo         │
+│ Upstream policy implementations and checkpoints              │
+│ OpenPI · OpenVLA · LeRobot · GR00T · WAMs · custom repos    │
 └──────────────────────────┬──────────────────────────────────┘
-                           │ PolicyClient
-                           │ update / predict / reset / health
+                           │ model adapter
+┌──────────────────────────▼──────────────────────────────────┐
+│ Pinned XPolicyLab-compatible service                        │
+│ isolated dependencies · lifecycle · capability declaration  │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ XPolicyLabPolicyClient
 ┌──────────────────────────▼──────────────────────────────────┐
 │ Runner                                                       │
-│ episode state machine · deadlines · termination · recording  │
-│                                                             │
+│ episode state · deadlines · chunk scheduling · termination  │
+│ success · safety · interventions · recording                │
 │ consumes: PolicyClient, Backend, EvaluationConfig            │
 └──────────────────────────┬──────────────────────────────────┘
                            │ Backend
-                           │ reset / observe / step / stop
 ┌──────────────────────────▼──────────────────────────────────┐
 │ Backend adapters                                             │
-│ LIBERO · Arena · Genesis · robot hardware                    │
+│ LIBERO · ALOHA Sim · Arena · LeRobot Robot · hardware       │
 └─────────────────────────────────────────────────────────────┘
 
-TrialRecord ──► eval-protocol
+TrialRecord ──► eval-protocol ──► reports / datasets
 ```
 
 ### 6.1 Required contracts
 
-The exact language may change, but the information boundary must not.
-
 ```python
 class PolicyClient(Protocol):
-    def reset(self, context: EpisodeContext) -> None: ...
+    def capabilities(self) -> PolicyCapabilities: ...
+    def begin_episode(self, context: EpisodeContext) -> None: ...
     def predict(self, observation: Observation, deadline_ns: int) -> ActionChunk: ...
+    def end_episode(self, reason: StopReason) -> None: ...
     def health(self) -> HealthStatus: ...
 
 class Backend(Protocol):
@@ -170,13 +298,97 @@ class Backend(Protocol):
     def stop(self, reason: StopReason) -> None: ...
 ```
 
-`Action` is not merely a float array. It records at least:
+`XPolicyLabPolicyClient` maps these calls to the pinned service profile. The Runner never imports XPolicyLab model classes.
 
-- semantic type: joint, end-effector, velocity, torque, latent token, or another declared type;
+### 6.2 Policy profile
+
+Every runnable checkpoint has a machine-readable profile:
+
+```yaml
+policy_id: openpi/pi0_aloha_sim
+model_family: pi0
+provider_runtime: openpi
+service_adapter: xpolicylab/openpi
+
+checkpoint:
+  uri: gs://openpi-assets/checkpoints/pi0_aloha_sim
+  digest: required
+  source_revision: required
+
+observation:
+  state:
+    dimension: 14
+    semantics: dual_arm_joint_position
+  cameras:
+    required: [cam_high]
+    optional: [cam_left_wrist, cam_right_wrist]
+
+action:
+  dimension: 14
+  semantics: absolute_joint_position
+  units: declared
+  chunk_horizon: 10
+
+execution:
+  control_hz: 50
+  stateful: true
+  batching: false
+
+normalisation:
+  source: checkpoint
+  digest: required
+```
+
+The exact values above are illustrative until pinned by the implementation. The schema requirement is not.
+
+### 6.3 Backend capabilities
+
+Each backend declares matching properties:
+
+```yaml
+backend_id: aloha_sim/gym_aloha
+embodiment: aloha
+domain: simulation
+observation:
+  state_dimension: 14
+  cameras: [cam_high]
+action:
+  dimension: 14
+  semantics: absolute_joint_position
+control_hz: 50
+supports:
+  reset: automatic
+  privileged_success: true
+  parallel_instances: false
+```
+
+### 6.4 Compatibility preflight
+
+Before an episode starts, crossrun checks at least:
+
+- required observation keys and shapes;
+- camera count, naming and image properties;
+- action dimension, semantic type, frame and units;
+- absolute versus relative control;
+- normalisation statistics and their digest;
+- control frequency and action chunk timing;
+- required decoder or low-level controller;
+- stateful reset semantics;
+- batching and concurrency;
+- timeout and cancellation capability.
+
+A mismatch is rejected or resolved by an explicitly named adapter. It is never silently inferred from a shared model-family name.
+
+### 6.5 Action and step records
+
+`Action` records at least:
+
+- semantic type: joint, end-effector, velocity, torque, latent token or another declared type;
 - dimensions and chunk horizon;
 - frame and units where applicable;
 - intended control frequency or timestamps;
-- validity limits.
+- validity limits;
+- decoder identity when actions are latent.
 
 `StepResult` records at least:
 
@@ -191,74 +403,56 @@ intervention state
 backend-specific diagnostics
 ```
 
-The runner may depend on these internal types. It must not import simulator packages; backend adapters own those imports.
-
-### 6.2 Sim/real symmetry and asymmetry
-
-| Capability | Simulation default | Hardware default | Contract consequence |
-|---|---|---|---|
-| reset | environment reset | manual, fixture, replay guide, or learned reset | `ResetSpec` and reset provenance |
-| success | privileged state predicate | classifier, sensors, or human audit | label source, version, confidence, abstention |
-| time | stepped or accelerated | wall-clock and deadline constrained | timestamps and deadline semantics |
-| observation | deterministic state/render path is possible | noise, calibration drift, loss, asynchronous sensors | capability metadata and missing-data policy |
-| control | simulator actuator model | driver and low-level controller | declared units, frames, rate, saturation |
-| safety | simulation limits and invalid-state checks | workspace, motor, collision, and emergency-stop checks | safety events are never assumed true |
-| failure recovery | reset process | intervention, reboot, or cell repair | explicit termination and intervention records |
-
-Reset, success, and time are the most visible orchestration seams; they are not an exhaustive list of sim/real differences.
-
-### 6.3 XPolicyLab's two roles
-
-| Role | Meaning | crossrun treatment |
-|---|---|---|
-| policy-side interface source | lifecycle methods and payload conventions | pin and adapt; do not assume stability |
-| provider of many policies | a policy zoo with isolated dependencies | optional provider alongside individual containers |
-
-XPolicyLab is not a model. It is also not the execution layer. The adapter must make it possible to replace XPolicyLab without changing the runner state machine.
-
 ---
 
 ## 7. Repository shape and dependency rules
 
 ```text
 crossrun/
-├── contracts/             # PolicyClient, Backend, TrialRecord, capabilities
-├── runner/                # episode state machine; no simulator imports
+├── contracts/                 # PolicyClient, Backend, profiles, TrialRecord
+├── runner/                    # episode state machine; no upstream imports
 ├── adapters/
-│   ├── policy/            # XPolicyLab and individual policy adapters
-│   └── backend/           # LIBERO, Arena, hardware, later candidates
-├── eval-protocol/         # statistics, reports, comparisons
-├── containers/            # reference templates and registry
-├── assets/                # source manifests and generation scripts
+│   ├── policy/
+│   │   └── xpolicylab/       # the production policy boundary
+│   └── backend/               # LIBERO, ALOHA Sim, hardware, later backends
+├── service-profiles/          # pinned XPolicyLab consumption profiles
+├── policy-manifests/          # checkpoint/profile metadata, no weights
+├── eval-protocol/             # statistics, reports, comparisons
+├── containers/                # service and backend reference templates
+├── assets/                    # source manifests and generation scripts
 ├── ci/
 └── docs/
 ```
 
 **Hard constraints:**
 
-- `runner/` imports contracts, not simulator or robot-driver packages.
+- `runner/` imports contracts, not XPolicyLab, simulator or robot-driver packages.
+- Production policies are reached through `XPolicyLabPolicyClient` and a pinned service profile.
+- Model-specific transforms stay in the policy-service environment, not in the Runner.
 - Backend-specific types do not leak into `PolicyClient` or `TrialRecord`.
 - `eval-protocol/` consumes `TrialRecord` objects, not a lossy `(success, trajectory)` tuple.
-- No model weights or model implementations are committed to this repository.
-- The XPolicyLab consumption profile is versioned internally but is not promoted as a competing public standard.
-- Generated assets are reproducible from source manifests where upstream terms permit it.
+- No model weights or upstream model implementations are committed to this repository.
+- Checkpoint conversion is optional; every conversion records source artifact, converter revision and validation result.
 - Large binary assets and datasets live outside git with immutable hashes.
 - Policy servers default to loopback. Remote mode is explicit and authenticated.
 
-**Minimum `TrialRecord` identity:**
+### 7.1 Minimum TrialRecord identity
 
 ```text
 trial_id and run_id
 task and task-definition revision
 seed and initial-condition identifier
-policy adapter, checkpoint digest, container digest
+policy profile and service-profile revision
+upstream runtime revision
+checkpoint digest and conversion lineage
+container digest
 normalisation-statistics digest
-backend, backend version, physics configuration
+backend, backend version and physics configuration
 perturbation tier and parameters
 action/control configuration
 termination and failure reason
 safety events and interventions
-success label, source, classifier version, confidence, audit state
+success label, source, classifier version, confidence and audit state
 trajectory or trajectory digest
 ```
 
@@ -268,35 +462,30 @@ trajectory or trajectory digest
 
 ### 8.1 Cross-backend comparison
 
-The same nominal task can differ across physics engines because of contact, friction, rendering, control, and solver behaviour.
-
-**Rules:**
+The same nominal task can differ across physics engines because of contact, friction, rendering, control and solver behaviour.
 
 - Never pool results from different backends into one success rate.
 - Report backend and version as first-class grouping variables.
-- Absolute success rates may appear in the same report when clearly stratified; they must not be interpreted as equal-difficulty measurements.
-- Compare ranking agreement, matched failure modes, and policy-by-backend interactions.
-- A ranking reversal is evidence of an interaction. It does not by itself prove that either backend contains an artefact.
-- Where matched initial conditions are available, preserve pairing and use paired analysis.
-
-A second backend is therefore not a source of a “truer” score. It is a way to measure sensitivity to implementation conditions.
+- Absolute success rates may appear together when clearly stratified; do not interpret them as equal-difficulty measurements.
+- Compare ranking agreement, matched failure modes and policy-by-backend interactions.
+- A ranking reversal is evidence of an interaction, not proof that either backend is wrong.
+- Preserve pairing when matched seeds or initial conditions exist.
 
 ### 8.2 Statistical discipline
 
 - Record the complete trial identity above.
-- Report a binomial interval for each policy × task × backend × perturbation condition. Clopper-Pearson is a conservative default; the report may additionally include Wilson or Bayesian intervals if named explicitly.
+- Report a binomial interval for each policy × task × backend × perturbation condition.
+- Clopper–Pearson is a conservative default; alternatives may be added if named explicitly.
 - Do not infer equality from overlapping confidence intervals.
-- Predeclare pairwise comparisons and correct for multiplicity where many policies or tiers are tested.
-- Use paired tests or hierarchical models when runs share seeds or initial conditions.
-- Separate rollout sampling uncertainty from success-label uncertainty.
+- Predeclare comparisons and correct for multiplicity where appropriate.
+- Use paired tests or hierarchical models for shared seeds or initial conditions.
+- Separate rollout-sampling uncertainty from success-label uncertainty.
 
-**Power reference:** 63 successes in 70 Bernoulli trials gives an exact 95% interval approximately 15 percentage points wide. Achieving a roughly ±2-point interval near 90% success requires on the order of one thousand trials; the exact requirement depends on the interval and stopping rule.
-
-**Protocol comparison wording:** OpenVLA reports 50 rollouts per task per seed in the cited setup. A reproduction default of 10 episodes per task is therefore a fivefold per-task difference, not a comparison of 1,500 total rollouts with 10 total rollouts.
+**Power reference:** 63 successes in 70 Bernoulli trials gives an exact 95% interval approximately 15 percentage points wide. Achieving a roughly ±2-point interval near 90% success requires on the order of one thousand trials; the exact requirement depends on interval and stopping rule.
 
 ### 8.3 Perturbation tiers
 
-Standard and perturbed results are always reported together. Perturbations must record their generation seed and parameters, and should distinguish at least:
+Standard and perturbed results are reported together. Perturbations record generation seed and parameters and should distinguish:
 
 - visual appearance and distractors;
 - lighting and rendering;
@@ -308,111 +497,113 @@ A collapse under one perturbation is evidence about that perturbation family, no
 
 ### 8.4 Hardware success labels
 
-A VLM or learned classifier is a measurement instrument, not ground truth. Hardware reports must include:
+A learned classifier is a measurement instrument, not ground truth. Hardware reports include:
 
 - classifier and prompt/configuration revision;
-- confidence or score and abstention behaviour;
+- score and abstention behaviour;
 - a sampled human-audit set;
 - confusion estimates on the evaluated task distribution;
 - the policy for disagreements and uncertain outcomes.
-
-The confidence interval over rollouts does not account for label error unless the analysis models it explicitly.
 
 ---
 
 ## 9. Scope and phases
 
-> Make the pattern clear on the smallest reproducible example, then test whether it extends.
+### Phase 0 — one service, two MuJoCo paths
 
-**Minimum demonstrable set:** LIBERO on the Panda/Franka embodiment in MuJoCo, one VLA, and one world-action model.
+- [ ] Pin the reviewed XPolicyLab revision and write `crossrun-xpolicylab-v1`.
+- [ ] Implement `PolicyClient`, `Backend`, `PolicyProfile`, `BackendCapabilities`, `StepResult` and `TrialRecord`.
+- [ ] Implement `XPolicyLabPolicyClient` without importing model implementations into crossrun.
+- [ ] Bring up **LIBERO/Panda + `pi05_libero`** through the pinned service.
+- [ ] Bring up **ALOHA Sim + `pi0_aloha_sim`** through the same service and Runner.
+- [ ] Demonstrate that only profiles and adapters differ; episode logic remains unchanged.
+- [ ] Implement compatibility preflight and reject intentional mismatch fixtures.
+- [ ] Implement provenance, trajectory digests and confidence intervals.
+- [ ] Add schema validation, deadlines, bounded queues and loopback-only defaults.
 
-**Extensibility candidates:** G1 through Arena plus a separately validated GR00T-WBC/SONIC stack; G2 through versioned assets derived from Genie Sim.
+### Phase 1 — policy intake
 
-### Phase 0 — Boundaries before coverage
+- [ ] Add an OpenVLA or OpenVLA-OFT checkpoint through its original runtime.
+- [ ] Build `XPolicyLabLeRobotModel` for LeRobot-native `PreTrainedPolicy` checkpoints.
+- [ ] Validate one LeRobot-native checkpoint against its published baseline.
+- [ ] Add one world-action or memory/planning policy with declared stateful capabilities.
+- [ ] Test a policy that does not support batching.
+- [ ] Test server crash, timeout, malformed payload, stale observation and cancellation behaviour.
+- [ ] Publish an adapter checklist and conformance report for every policy.
 
-- [ ] Pin the XPolicyLab revision and write the consumed lifecycle/profile explicitly.
-- [ ] Define `PolicyClient`, `Backend`, `BackendCapabilities`, `StepResult`, and `TrialRecord`.
-- [ ] Implement SimRunner + LIBERO/Panda + one official public checkpoint end to end.
-- [ ] Implement seed management, provenance, trajectory digests, and confidence intervals.
-- [ ] Measure latent-token payload support, reset behaviour, batching, throughput, timeouts, cancellation, and server failure.
-- [ ] Add schema-validation and loopback-only security defaults.
-- [ ] Verify the exact Isaac Lab and Arena revisions before planning an integration.
+### Phase 2 — claims and minimal hardware loop
 
-### Phase 1 — Claims and minimal hardware symmetry
+- [ ] Protocol/sample-size sensitivity demo.
+- [ ] Controlled perturbation-collapse demo.
+- [ ] Implement a RealRunner skeleton with manual reset guidance.
+- [ ] Use LeRobot's `Robot` abstraction for one hardware backend where practical.
+- [ ] Record success-label provenance, safety events and interventions from the first hardware run.
+- [ ] Test an ALOHA real path only with a checkpoint/profile matching the actual hardware configuration.
 
-- [ ] Demo 1: protocol and sample-size sensitivity.
-- [ ] Demo 3: controlled perturbation collapse.
-- [ ] Add a second conventional policy and one world-action model.
-- [ ] Implement a RealRunner skeleton with manual reset guidance and a minimal hardware loop.
-- [ ] Record success-label provenance and intervention events from the first hardware run.
-- [ ] Evaluate a second backend only after a matched task and control definition exists.
+### Phase 3 — second backend and whole-body control
 
-### Second-backend gate
-
-| Criterion | Pass | Failure means |
-|---|---|---|
-| porting cost | one task and embodiment in five engineering days or less | investigate whether the backend contract leaks |
-| rendering/control viability | enough throughput and fidelity for the planned trial count | retain as a watch item or narrow the demo |
-| contract reuse | runner state machine and evaluation schema remain unchanged | revise contracts before adding more backends |
-| task matching | task, embodiment, observations, and action semantics are documented | do not interpret differences as backend effects |
-
-Passing the gate makes the backend eligible for the interaction demo. Failure is a design result, not a reason to hide the attempt.
-
-### Phase 2 — G1 and whole-body control
-
+- [ ] Add a second implementation of a matched task only after task and control semantics are documented.
 - [ ] Validate Arena's G1 path independently.
-- [ ] Validate the GR00T-WBC/SONIC encoder, decoder, hands, cameras, and controller independently.
-- [ ] Build an adapter between the two only after both paths run.
-- [ ] Record the 78-dimensional action interpretation and decoder revision rather than assuming generic float-array compatibility is sufficient.
+- [ ] Validate GR00T-WBC/SONIC encoder, decoder, hands, cameras and controller independently.
+- [ ] Connect the stacks only after both run separately.
 - [ ] Keep the low-level controller swappable so policy and controller failures can be separated.
 
-### Phase 3 — G2 assets
+### Phase 4 — G2 and outward work
 
-- [ ] Pin the exact Genie Sim source revision and inventory file-level licenses.
-- [ ] Produce versioned assets and generation/extraction scripts where redistribution is allowed.
-- [ ] Keep the default path runnable without initialising the upstream repository.
-- [ ] Use a known-good checkpoint only after its weight license and redistribution terms are recorded.
+- [ ] Pin Genie Sim source revisions and inventory file-level licenses.
+- [ ] Produce versioned G2 assets and scripts where redistribution is allowed.
+- [ ] Keep the default paths runnable without the upstream asset repository.
+- [ ] Publish negative results and rejected integrations, not only successful demos.
+- [ ] Consider EnvHub and upstream contributions after contracts survive multiple policies and backends.
 
-### Phase 4 — Outward
+### 9.1 XPolicyLab upgrade gate
 
-- [ ] Publish the design and negative results, not only successful demos.
-- [ ] Complete hardware reset, success, safety, and recovery paths.
-- [ ] Consider EnvHub registration once contracts have survived two backends.
-- [ ] Contribute integrations upstream where ownership and maintenance are clearer there.
+Never track XPolicyLab `main` implicitly. An upgrade is a separate change with:
+
+1. an old-to-new consumption-profile diff;
+2. adapter static checks;
+3. debug closed-loop checks;
+4. end-to-end regression on:
+   - π0.5 + LIBERO/Panda;
+   - π0 + ALOHA Sim;
+   - one LeRobot-native policy through the generic bridge;
+   - one stateful or world-action policy;
+   - one non-batched policy;
+5. performance measurements for latency, throughput and memory;
+6. result comparison against the previous pinned service revision.
+
+An upstream addition is not automatically enabled merely because it exists in the XPolicyLab catalog.
 
 ---
 
-## 10. Risks, security, and licensing
+## 10. Risks, security and licensing
 
 | Risk | Level | Response |
 |---|---|---|
-| **Policy interface drift** | High | pin revisions; contract tests; keep the adapter replaceable |
-| **Runner/backend boundary leaks** | High | second-backend gate; prohibit simulator types in contracts |
-| **Isaac/Newton migration churn** | High | pin exact revisions; treat backend changes as measured upgrades |
-| **G1 dependency chain** | Med-high | validate Arena and WBC/SONIC separately before integration |
-| **Success-label error on hardware** | High | audit labels and report the measurement process |
+| **XPolicyLab interface churn** | High | pin exact revisions; maintain consumption profile; regression-gated upgrades |
+| **Adapter quality varies by model** | High | conformance tests, known-good checkpoint run and provenance manifest |
+| **Runtime boundary cannot express a complex policy** | High | capability extensions; do not leak policy logic into Runner |
+| **Checkpoint/model-family confusion** | High | immutable policy profiles and compatibility preflight |
+| **LeRobot bridge falsely appears universal** | Med-high | define supported `PreTrainedPolicy` subset; require policy-specific validation |
+| **Runner/backend boundary leaks** | High | second-backend gate; prohibit upstream types in contracts |
+| **Success-label error on hardware** | High | audit labels and report measurement process |
 | **Cross-backend overinterpretation** | Med-high | stratified reports and interaction analysis |
-| **Demos remain toy examples** | Med-high | real checkpoints, perturbations, sufficient trials, failure records |
 | **Asset/license ambiguity** | High | per-file and per-weight manifests; no blanket ecosystem claim |
 
-### Security baseline
+### 10.1 Security baseline
 
-A server not exposed to the public internet can still be unsafe on a shared or compromised network. The baseline is:
-
-- no pickle or executable deserialisation across the boundary;
+- no pickle or executable deserialisation across the network boundary;
 - schema and size validation for every request and response;
 - loopback binding by default;
-- authenticated and encrypted remote transport, normally through a private network or tunnel;
+- authenticated and encrypted remote transport through a private network or tunnel;
 - network allow-lists and explicit remote-mode configuration;
-- request deadlines, rate limits, and bounded queues;
+- request deadlines, rate limits and bounded queues;
 - least-privilege containers or processes;
-- health checks and a fail-safe stop path when the policy server is unavailable.
+- health checks and a fail-safe stop path when the policy service is unavailable.
 
-The LeRobot async-server vulnerability is a useful precedent for the class of risk, not evidence that merely changing the bind address solves it.
+### 10.2 Licensing baseline
 
-### Licensing baseline
-
-Open-source and non-commercial intent do not remove license obligations. Every external artifact or weight must record:
+Every external artifact or weight records:
 
 ```text
 source URL and exact revision
@@ -422,9 +613,10 @@ redistribution and derivative permissions
 required notices and attribution
 use restrictions
 local modifications and generated-file provenance
+conversion lineage
 ```
 
-No document should claim that an entire multi-purpose upstream repository has one license unless that has been checked file by file.
+Open-source and non-commercial intent do not remove these obligations.
 
 ---
 
@@ -432,18 +624,16 @@ No document should claim that an entire multi-purpose upstream repository has on
 
 | Option | Why not now |
 |---|---|
-| Build a simulator or benchmark from scratch | years of work and no immediate comparability |
-| Fork fast-moving upstreams | maintenance and comparison drift; prefer extensions and pinned adapters |
-| Publish a competing policy protocol | start with an adapter and collect evidence before standardising anything |
-| Treat XPolicyLab as a model | it is a policy-serving framework and policy zoo |
-| Treat XPolicyLab as permanently mandatory | its coverage and operational semantics are not yet proven for every target |
-| Use Genie Sim as a default runtime dependency | too broad for the minimal path; consume only explicitly licensed, versioned pieces |
-| Use SIMPLE as the foundation | useful task designs, but not selected as the default execution stack |
-| Use Genesis as the default before an end-to-end baseline exists | installation weight alone does not prove ecosystem readiness |
+| Support several first-class policy runtimes directly in Runner | multiplies lifecycle and failure semantics; use one service boundary |
+| Convert every checkpoint to one universal weight format | expensive, lossy and unnecessary for execution unification |
+| Require every model to become LeRobot-native | forces reimplementation or conversion before evaluation value is proven |
+| Treat XPolicyLab as a permanent public standard | it is a pinned dependency behind crossrun contracts |
+| Track XPolicyLab `main` automatically | rapid changes would invalidate reproducibility |
+| Put model-specific observation/action transforms in Runner | destroys separation and makes every model a Runner change |
+| Infer compatibility from model name or embodiment label | ignores checkpoint, normalisation, action and timing differences |
+| Run LIBERO tasks on ALOHA and call it the original LIBERO baseline | embodiment transfer is a different configuration requiring validation |
 | Put model code and weights in this repo | creates dependency and licensing conflicts |
-| Hide low-level controller choice | prevents attribution of whole-body failures |
 | Report one pooled number across backends | conflates condition changes with policy performance |
-| Frame all reproduction variance as a crisis | causes are heterogeneous and need trial-level evidence |
 
 ---
 
@@ -451,16 +641,18 @@ No document should claim that an entire multi-purpose upstream repository has on
 
 These are measurements to make, not conclusions already reached.
 
-1. Which XPolicyLab revision and exact method set should the first consumption profile pin?
-2. Can the selected payload and adapter represent SONIC's latent-token action semantics, including decoder identity and timing, without an unsafe convention?
-3. What throughput, queueing, timeout, and cancellation behaviour appears under batched load?
-4. Which Arena revision and Isaac backend does the G1 path actually require?
-5. Does Arena integrate any part of SONIC natively, or is the connection entirely ours?
-6. Which G1 hands, cameras, and low-level controller match the chosen checkpoint?
-7. Can a second backend reproduce a matched task closely enough for an interpretable interaction study?
-8. How accurate and calibrated is the hardware success classifier on each task?
-9. What is the actual engineering time to add a robot after physical validation and safety review?
-10. Which upstream assets and weights can legally be redistributed, and which must be fetched by the user?
+1. Which exact XPolicyLab methods and transport messages should `crossrun-xpolicylab-v1` pin?
+2. Is the selected XPolicyLab revision reliable under concurrent batched load, timeout and cancellation?
+3. Which stateful policies require `begin_episode`/`step` rather than the common update/query lifecycle?
+4. How much of the LeRobot policy catalog can one generic bridge cover without policy-specific code?
+5. Can converted and original-runtime versions of the same model be shown behaviourally equivalent on fixed observations?
+6. Which fields are sufficient for a safe policy/backend compatibility preflight?
+7. How should action chunks be resampled when service and backend frequencies differ?
+8. Which ALOHA Sim task/checkpoint pair is the best stable Phase-0 baseline?
+9. Which real ALOHA hardware configuration matches available public checkpoints closely enough for a meaningful run?
+10. Which XPolicyLab adapters have a publicly reproducible known-good result rather than only a wiring check?
+11. Can a second backend reproduce a matched task closely enough for an interpretable interaction study?
+12. Which upstream assets and weights can legally be redistributed, and which must be fetched by the user?
 
 ---
 
@@ -469,10 +661,12 @@ These are measurements to make, not conclusions already reached.
 | | |
 |---|---|
 | XPolicyLab | https://github.com/XPolicyLab/XPolicyLab |
-| openpi | https://github.com/Physical-Intelligence/openpi |
+| OpenPI | https://github.com/Physical-Intelligence/openpi |
 | OpenVLA | https://github.com/openvla/openvla |
-| LIBERO | https://github.com/Lifelong-Robot-Learning/LIBERO |
+| OpenVLA-OFT | https://github.com/moojink/openvla-oft |
 | LeRobot | https://github.com/huggingface/lerobot |
+| LIBERO | https://github.com/Lifelong-Robot-Learning/LIBERO |
+| gym-aloha | https://github.com/huggingface/gym-aloha |
 | Isaac Lab-Arena | https://github.com/isaac-sim/IsaacLab-Arena |
 | Newton Physics | https://github.com/newton-physics/newton |
 | Isaac-GR00T | https://github.com/NVIDIA/Isaac-GR00T |
@@ -482,4 +676,3 @@ These are measurements to make, not conclusions already reached.
 | SIMPLE | https://github.com/physical-superintelligence-lab/SIMPLE |
 | Genesis | https://github.com/Genesis-Embodied-AI/genesis-world |
 | AutoEval | https://auto-eval.github.io/ |
-| SimplerEnv | https://github.com/simpler-env/SimplerEnv |
