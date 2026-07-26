@@ -348,7 +348,7 @@ Each backend declares matching properties:
 ```yaml
 backend_id: aloha_sim/gym_aloha
 embodiment: aloha
- domain: simulation
+domain: simulation
 observation:
   state_dimension: 14
   cameras: [cam_high]
