@@ -1,21 +1,21 @@
-# crossrun — Design Document v2.7
+# crossrun — Design Document v2.8
 
-> **What this is**: a pinned integration distribution for running and evaluating robot policies in simulation and on hardware.
+> **What this is**: a pinned integration distribution and best-practice incubator for running and evaluating robot policies in simulation and on hardware.
 > **Status**: design phase. The architecture is under validation; code has not started.
 > **Companion research**: see [`research/`](research/).
 
-**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit execution/environment contract. v2.4 chose one default policy runtime boundary and added ALOHA Sim beside LIBERO/Panda. v2.5 defined that boundary as a pinned crossrun-maintained XPolicyLab fork and made Phase 0 π0.5-only. v2.6 aligned policy intake and hardware scope with current upstreams. **v2.7 makes crossrun an integration distribution: upstream-native loops keep episode ownership, wrappers and plugins are preferred over forks, local deltas are governed as temporary patch debt, and crossrun owns the reproducible bundle rather than a mandatory new execution framework.**
+**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit execution/environment contract. v2.4 chose one default policy runtime boundary and added ALOHA Sim beside LIBERO/Panda. v2.5 defined that boundary as a pinned crossrun-maintained XPolicyLab fork and made Phase 0 π0.5-only. v2.6 aligned policy intake and hardware scope with current upstreams. v2.7 made crossrun an integration distribution around upstream-native execution, reproducible bundles and governed overlays. **v2.8 adds the other half of the project: crossrun may incubate and prove a better cross-project reference architecture before upstreams accept it, while retaining native paths as comparison baselines.**
 
 ---
 
 ## 1. Positioning
 
-**In one line:** assemble fast-moving upstream policy, environment and hardware projects into pinned, tested and reproducible bundles without permanently copying their implementations.
+**In one line:** assemble fast-moving upstream projects into reproducible bundles and provide a place to prove better integration architecture before deciding where it should live long term.
 
 The project is not another simulator, benchmark, model zoo, training framework, universal policy protocol or mandatory episode loop. Its short-term value is:
 
 1. exact upstream, checkpoint, container and asset revisions that work together;
-2. small wrappers, plugins or fork commits for gaps that block immediate use;
+2. focused wrappers, plugins, reference integrations or fork commits for gaps and architectural experiments;
 3. explicit compatibility metadata between policies, environments and controllers;
 4. one launch and conformance surface across otherwise separate upstream tools;
 5. evaluation records that preserve uncertainty, upstream identity and local modifications.
@@ -24,18 +24,19 @@ The project is not another simulator, benchmark, model zoo, training framework, 
 
 1. Reproducible integration bundles that run selected end-to-end paths.
 2. Conformance fixtures that make upstream updates and patch drift visible.
-3. Generally useful fixes proposed to their natural upstream owners.
-4. A design and evidence record that explains any remaining crossrun-only glue.
+3. Best-practice reference implementations evaluated against current upstream baselines.
+4. Generally useful fixes proposed to their natural upstream owners after they work in practice.
+5. A design and evidence record that explains why any remaining crossrun-owned code belongs here.
 
-**Success looks like:** someone can materialize a clean workspace from one bundle manifest, launch a selected policy/environment/hardware path, and see exactly which upstream revisions, overlays, transformations and assumptions produced the result.
+**Success looks like:** someone can materialize a clean workspace from one bundle manifest, launch both an upstream-native baseline and a selected reference path, and see exactly which architecture, revisions, transformations and assumptions produced each result.
 
 ---
 
 ## 2. Integration strategy
 
-### 2.1 Native execution first
+### 2.1 Native baseline first
 
-Episode ownership stays with the maintained upstream path that already implements it:
+Every integration starts by preserving the maintained upstream path as a runnable baseline:
 
 | Path | Default execution owner |
 |---|---|
@@ -45,35 +46,67 @@ Episode ownership stays with the maintained upstream path that already implement
 | Heterogeneous original-runtime policy | XPolicyLab service, bridged into the selected environment owner |
 | Arena/EnvHub task | the Arena or EnvHub environment package plus its supported evaluator |
 
-crossrun adds a new episode loop only after a runnable spike proves that no upstream owner can express the required lifecycle. A local loop is a fallback with an explicit deletion condition, not the architectural default.
+For ordinary compatibility work, episode ownership stays with that upstream path. This avoids rewriting working lifecycle code merely to make projects look uniform.
 
-### 2.2 Wrapper, plugin, patch, fork
+The native baseline is not an architecture veto. crossrun may own a different execution path when it tests a named best-practice hypothesis that cannot be evaluated inside the current upstream architecture without a large, speculative change.
 
-Every integration escalates through the least expensive mechanism that works:
+### 2.2 Best-practice reference track
+
+A reference integration is first-class work, not an accidental patch. It must state:
+
+```yaml
+hypothesis: required
+native_baseline: required
+reference_architecture: required
+expected_improvement: required
+comparison_dimensions: required
+semantic_equivalence_limits: required
+upstream_destination_candidates: required
+long_term_options: [upstream, crossrun, fork, delete]
+review_after: required
+```
+
+For example, RoboDojo currently supplies a valid native baseline using its own managers directly on Isaac Sim and a pinned Isaac Lab fork. crossrun may additionally implement an Arena-based reference path using pinned RoboDojo task intent and assets where licensing permits. That path must not be called upstream RoboDojo or benchmark-equivalent until task, reset, observation, action, controller and success semantics pass declared conformance checks.
+
+The comparison asks whether Arena materially improves composition, standard scene/robot configuration, reuse across embodiments, vectorisation, integration with EnvHub/LeRobot, and upgrade cost. It also measures migration effort, performance regressions, semantic drift and the new dependency surface. “Arena is newer” is not evidence that it is better.
+
+The implementation lands in crossrun first. Once it is runnable and measured:
+
+1. propose small generic fixes to their natural upstream;
+2. offer a larger upstream migration only with evidence and a maintainable series of changes;
+3. retain the reference integration or a dedicated fork if upstream scope or priorities differ; or
+4. delete it if the measured benefit does not justify its maintenance cost.
+
+Upstream acceptance is an outcome, not a prerequisite for experimentation.
+
+### 2.3 Wrapper, plugin, patch, fork
+
+Compatibility fixes escalate through the least expensive mechanism that works. A reference integration may deliberately use a larger mechanism when the architecture itself is the hypothesis:
 
 1. **Wrapper:** compose public commands or APIs without modifying upstream code.
 2. **Plugin:** use an upstream extension point, preferably out of tree until stable.
 3. **Patch:** carry a small temporary source change that can be replayed onto one exact base revision.
 4. **Fork:** maintain source-side changes that need their own CI, release artifact or coordinated multi-file evolution.
 
-A fork is not a project achievement. It is accepted maintenance debt. Each local delta records:
+A fork or reference integration creates maintenance cost, but it can be the correct incubation vehicle. Each local delta records:
 
 ```yaml
-upstream_repo: required
-upstream_base_revision: required
+source_upstreams: required
+upstream_base_revisions: required
 local_revision_or_patch_digest: required
 owner: required
 rationale: required
+lifecycle_intent: temporary_hotfix | upstream_candidate | crossrun_reference
 affected_bundles: required
 regression_fixtures: required
-upstream_issue_or_pr: required_or_explained
+upstream_issue_or_pr: required_for_upstream_candidate
 review_after: required
-removal_condition: required
+exit_or_reassessment_condition: required
 ```
 
 No production machine contains an unrecorded manual edit. A clean checkout plus the bundle manifest must reproduce the full source state.
 
-### 2.3 The initial XPolicyLab fork
+### 2.4 The initial XPolicyLab fork
 
 crossrun maintains a pinned XPolicyLab fork because heterogeneous model dependencies and the existing adapter catalog are immediately useful, while service hardening and Pi adapter gaps currently require source-side changes. The fork:
 
@@ -85,7 +118,7 @@ crossrun maintains a pinned XPolicyLab fork because heterogeneous model dependen
 
 **Upstream check, 2026-07-28.** XPolicyLab `main` was `5071d8ff557f8f258e50aec5b46a701772bc3295`. Its model lifecycle and WebSocket implementation still lack declared capabilities, bounded payloads, end-to-end deadlines and true transport batching. The WebSocket client implements a batch request as sequential `infer` calls. The Pi adapters require all three ALOHA cameras even though OpenPI permits masked wrist cameras, and the vendored config does not include the public `pi05_aloha` or `pi05_libero` profiles. These are initial fork patches and upstream PR candidates, not permanent crossrun features.
 
-### 2.4 Bundle manifest and service profile
+### 2.5 Bundle manifest and service profile
 
 The bundle manifest is the top-level reproducibility unit. It pins every upstream and local delta and references narrower runtime profiles:
 
@@ -162,7 +195,7 @@ Neither manifest is advertised as an ecosystem standard. They exist to:
 
 The profile must not call a loop of single-item requests "batched inference". Transport batching is declared only after one request reaches a model-side batch implementation.
 
-### 2.5 What happens when a model does not fit
+### 2.6 What happens when a model does not fit
 
 A model must not hide important semantics inside arbitrary dictionary fields merely to appear compatible.
 
@@ -182,19 +215,19 @@ For a conventional policy, use the owning runtime's normal policy interface. For
 
 1. map it to an existing upstream lifecycle without losing semantics;
 2. extend the natural upstream interface and propose the change there; or
-3. carry a versioned bridge extension in crossrun with an explicit removal condition.
+3. carry a versioned bridge extension in crossrun with an explicit reassessment condition and long-term owner.
 
 Failure to fit is evidence about the bridge or upstream interface. It is not a reason to create a second model implementation or hide lifecycle state in arbitrary observation fields.
 
 ---
 
-## 3. Upstream ownership
+## 3. Ownership
 
 ### 3.1 LeRobot
 
 LeRobot is the preferred owner for LeRobot-native policies, processor pipelines, standard Gym/EnvHub evaluation, `Robot` drivers, hardware rollout and LeRobotDataset interchange.
 
-**Upstream check, 2026-07-28.** LeRobot `main` was `95211b98f1cd6b638bda84a8d28f9e41323229dd`. It already contains `lerobot-eval`, original MuJoCo LIBERO, gym-aloha, a native π0.5 implementation and LIBERO checkpoint, EnvHub/Arena integration, async inference, episodic and intervention-aware hardware rollout, and Unitree G1 simulation and real-robot support for 23/29 DoF variants. crossrun must reuse and validate these paths rather than recreate them.
+**Upstream check, 2026-07-28.** LeRobot `main` was `95211b98f1cd6b638bda84a8d28f9e41323229dd`. It already contains `lerobot-eval`, original MuJoCo LIBERO, gym-aloha, a native π0.5 implementation and LIBERO checkpoint, EnvHub/Arena integration, async inference, episodic and intervention-aware hardware rollout, and Unitree G1 simulation and real-robot support for 23/29 DoF variants. crossrun reuses these as native baselines and avoids recreating them unless a named reference experiment is testing a materially different architecture.
 
 The first crossrun integration should be an out-of-tree XPolicyLab remote-policy plugin for LeRobot. A checkpoint from another runtime is not assumed equivalent to a LeRobot port of the same model family; original-runtime and converted runs retain separate lineage.
 
@@ -209,7 +242,13 @@ XPolicyLab owns heterogeneous original-runtime model adapters, dependency isolat
 - OpenPI owns original OpenPI runtime behaviour and checkpoint configuration.
 - Genie Sim and AgiBot-owned packages are the natural homes for redistributable G2 simulation assets.
 
-crossrun may wrap any of these projects and normalize their output. It does not copy their task implementations or use an MIT repository to obscure upstream license restrictions.
+crossrun may wrap these projects, normalize their output, or implement a new composition of their public assets and semantics as a clearly named reference integration. It does not silently copy upstream task implementations, relabel a port as the original benchmark, or use an MIT repository to obscure upstream license restrictions.
+
+### 3.4 crossrun
+
+crossrun owns integration architecture that spans upstream boundaries and needs a runnable home before any one project can reasonably accept it. This includes bundle materialization, cross-project conformance, evidence normalization, and named reference integrations such as the Arena-based RoboDojo experiment.
+
+That ownership is legitimate when the implementation is independently useful, tested against native baselines, and maintained through public upstream boundaries. It does not make the integration an official RoboDojo or Arena path, and it does not prevent later transfer upstream. A rejected upstream proposal may remain here; an unmaintainable or disproven reference path may not.
 
 ---
 
@@ -218,15 +257,16 @@ crossrun may wrap any of these projects and normalize their output. It does not 
 Each claim must be visible in code and paired with evidence.
 
 1. **One bundle can materialize a known-good multi-repo stack.** Every source and artifact is pinned and reconstructable.
-2. **Native execution owners can be composed without copying their episode loops.** Bridges adapt policies and evidence at published boundaries.
+2. **Native baselines and reference integrations can coexist.** The former preserves upstream behaviour; the latter tests a named architectural improvement.
 3. **Checkpoint compatibility is metadata, not a model-name guess.** A policy and environment run only after a profile check.
-4. **Patch debt is explicit and removable.** Every local delta has an owner, fixture, upstream disposition and removal condition.
-5. **Models and upstream task implementations do not live in this repo.** crossrun contains overlays and manifests, not copies.
+4. **Local code has an explicit lifecycle.** Every delta is a temporary fix, upstream candidate or crossrun reference with an owner, fixture and reassessment condition.
+5. **Models and copied upstream task implementations do not live in this repo.** crossrun may own new integration code, but not unattributed mirrors.
 6. **Numbers ship with uncertainty and provenance.** A bare success rate is incomplete.
 7. **Perturbation evaluation is part of the baseline.** A standard score alone does not establish robustness.
 8. **Cross-environment results are stratified, not pooled.** Report environment-specific outcomes and analyse interactions.
 9. **Sim and real may use different execution owners.** Compatibility and evidence remain comparable without pretending their semantics are identical.
-10. **A local episode loop is evidence-driven.** It is added only when upstream-native loops cannot support a required path and carries a deletion gate.
+10. **A local episode loop is hypothesis-driven.** It may fill a concrete gap or test a better execution architecture, but must be compared with a native baseline.
+11. **Best practice is measured, not declared.** Adoption depends on capability, semantic fidelity, performance, interoperability and maintenance evidence.
 
 ---
 
@@ -291,19 +331,19 @@ The table below is a dated survey snapshot, not a compatibility guarantee.
 ```text
 Bundle manifest
   ├── exact upstream revisions and artifact digests
-  ├── overlays: plugins, patches and configuration
+  ├── overlays or reference-integration revision
   ├── launch recipe and compatibility profile
   └── expected evidence schema
                  │
                  ▼
 Materialize + compatibility preflight
                  │
-                 ▼
-Upstream-native execution owner
-  ├── LeRobot eval / rollout / Robot
-  ├── RoboDojo EvalEnv
-  ├── Arena / EnvHub
-  └── other selected upstream entry point
+        ┌────────┴────────┐
+        ▼                 ▼
+Native baseline       Reference integration
+LeRobot / RoboDojo    crossrun-owned Arena or
+Arena / EnvHub        other candidate architecture
+        └────────┬────────┘
                  │
        optional remote-policy bridge
        to the pinned XPolicyLab fork
@@ -312,7 +352,7 @@ Upstream-native execution owner
 Result adapter ──► evidence envelope ──► reports / datasets
 ```
 
-The execution owner remains visible in every bundle and result. crossrun does not pretend that distinct upstream loops have identical scheduling, reset, timeout or intervention semantics. It normalises only the evidence needed for reproducibility and comparison, preserving upstream-native output alongside the normalised envelope.
+The execution owner and path class remain visible in every bundle and result. crossrun does not pretend that native and reference loops have identical scheduling, reset, timeout or intervention semantics. It normalises only the evidence needed for reproducibility and comparison, preserving each path's native output alongside the normalised envelope.
 
 ### 6.1 Required integration artifacts
 
@@ -323,16 +363,24 @@ source_lock:
   fork_revision: required_when_forked
 
 overlay:
-  kind: plugin | patch | fork
+  kind: plugin | patch | fork | reference_integration
   source: required
   digest: required
   owner: required
-  upstream_issue_or_pr: required_or_not_applicable
+  lifecycle_intent: temporary_hotfix | upstream_candidate | crossrun_reference
+  upstream_issue_or_pr: required_for_upstream_candidate
   review_after: required
-  removal_condition: required
+  exit_or_reassessment_condition: required
+
+reference_integration:
+  hypothesis: required_when_applicable
+  native_baseline_bundle: required_when_applicable
+  semantic_conformance_fixture: required_when_applicable
+  comparison_report: required_when_applicable
 
 launch_recipe:
-  execution_owner: lerobot | robodojo | arena | other
+  path_class: native_baseline | reference_integration
+  execution_owner: lerobot | robodojo | crossrun | arena | other
   entry_point: required
   dependency_lock_digest: required
   arguments_and_environment: recorded
@@ -347,9 +395,9 @@ result_adapter:
   evidence_schema_version: required
 ```
 
-`SourceLock` makes upstream identity reproducible. `Overlay` makes every local delta accountable and removable. `LaunchRecipe` delegates episode ownership to a named upstream entry point. `CompatibilityProfile` rejects mismatched observations, actions and timing before launch. `ResultAdapter` adds crossrun evidence without discarding the source runtime's richer output.
+`SourceLock` makes upstream identity reproducible. `Overlay` gives every local delta an accountable lifecycle. `ReferenceIntegration` binds an architectural hypothesis to its native baseline and comparison evidence. `LaunchRecipe` names the actual episode owner instead of assuming it is upstream. `CompatibilityProfile` rejects mismatched observations, actions and timing before launch. `ResultAdapter` adds crossrun evidence without discarding the source runtime's richer output.
 
-A local execution loop may be introduced only after a bundle demonstrates that no upstream entry point can satisfy a required path. That loop must name the measured gap, have conformance fixtures, and carry a deletion condition tied to an upstream capability or accepted contribution.
+A local execution loop may fill a measured upstream gap or test a named reference architecture. It must have conformance fixtures and a native comparison path. Its reassessment gate may lead to upstreaming, continued crossrun ownership, a dedicated fork or deletion.
 
 ### 6.2 Policy profile
 
@@ -463,6 +511,7 @@ environment-specific diagnostics
 crossrun/
 ├── upstreams.lock.yaml        # exact upstream, fork and artifact identities
 ├── bundles/                   # runnable integration manifests
+├── integrations/              # crossrun-owned best-practice reference paths
 ├── plugins/                   # installable extensions at upstream boundaries
 ├── patches/                   # small, reviewable and replayable deltas
 ├── profiles/                  # policy, environment and service capabilities
@@ -477,8 +526,9 @@ crossrun/
 **Hard constraints:**
 
 - Every production bundle pins exact source and artifact revisions; none tracks a moving branch.
-- Every local delta is an installable plugin, replayable patch or named fork commit; manual source edits are invalid.
-- Episode ownership stays with the named upstream entry point unless a measured, documented gap justifies a temporary local loop.
+- Every local delta is an installable integration or plugin, replayable patch, or named fork commit; manual source edits are invalid.
+- Every reference integration names its native baseline, hypothesis, semantic limits, comparison dimensions and reassessment date.
+- Episode ownership stays explicit. Native bundles use the upstream owner; reference bundles may use crossrun code when that is the architecture under test.
 - Model-specific transforms stay with the policy runtime or a policy plugin; environment-specific transforms stay with the environment integration.
 - Result adapters preserve upstream-native records and add a versioned evidence envelope; they do not reduce output to a lossy `(success, trajectory)` tuple.
 - A clean checkout can materialize a bundle without relying on an unrecorded developer workspace.
@@ -568,6 +618,7 @@ A learned classifier is a measurement instrument, not ground truth. Hardware rep
 ### Phase 0 — first reproducible bundle
 
 - [ ] Define `upstreams.lock.yaml`, the bundle schema, overlay metadata and the evidence envelope.
+- [ ] Publish a dated architecture decision matrix covering the selected policy runtime, serving, environment composition, evaluation and hardware-control practices; distinguish adopted choices from hypotheses that need a reference integration.
 - [ ] Materialize a clean pinned LeRobot/OpenPI environment without manual source edits.
 - [ ] Run **original LIBERO/Panda + `pi05_libero`** through its native LeRobot/OpenPI-supported entry point and reproduce a known-good baseline.
 - [ ] Smoke-test **gym-aloha ALOHA Sim + `pi05_aloha`/`pi05_base`** through its native entry point and select a meaningful π0.5 task/checkpoint pair before making a success-rate claim.
@@ -601,35 +652,40 @@ XPolicyLab's expanding model catalog and crossrun Phase 1 are complementary only
 
 No other robot is a Phase-2 target unless hardware availability changes and this plan is revised.
 
-### Phase 3 — Isaac integrations and cross-environment evidence
+### Phase 3 — Isaac best-practice reference integration
 
-- [ ] Integrate RoboDojo through its published `EvalEnv`, task YAML and manager boundaries; do not describe that path as Isaac Lab-Arena.
+- [ ] Materialize RoboDojo through its published `EvalEnv`, task YAML and manager boundaries as the native baseline; do not describe that path as Isaac Lab-Arena.
+- [ ] Implement a crossrun-owned Arena reference integration for a narrow, representative RoboDojo task slice, using upstream assets and task intent where licensing permits rather than copying its managers wholesale.
+- [ ] Define semantic conformance for scene, robot, reset distribution, observations, actions, controllers, termination and success before comparing the two paths.
+- [ ] Compare native RoboDojo and the Arena reference path on composition complexity, reuse, vectorisation, performance, reproducibility, LeRobot/EnvHub interoperability and upgrade burden.
 - [ ] Evaluate Lightwheel-LIBERO on Isaac Lab-Arena as an explicitly adapted environment; document task, reset, camera, controller and success-predicate differences before selecting a matched study.
-- [ ] Keep original LIBERO, Lightwheel-LIBERO and RoboDojo result groups separate while using the common evidence envelope.
+- [ ] Keep original LIBERO, Lightwheel-LIBERO, RoboDojo-native and crossrun Arena-reference result groups separate while using the common evidence envelope.
 - [ ] Validate Arena's G1 path independently from the original MuJoCo and physical G1 paths.
 - [ ] Add GR00T-WBC/SONIC only after its encoder, decoder, hands, cameras and low-level controller are independently validated for the selected embodiment.
-- [ ] Publish one policy-by-environment interaction study without claiming that adapted tasks are benchmark-identical.
+- [ ] Publish the Arena adoption decision: upstream proposal, continued crossrun ownership, dedicated fork or deletion, with evidence for the selected outcome.
 
-### Phase 4 — stabilize, upstream and reduce patch debt
+### Phase 4 — stabilize, upstream and govern local ownership
 
 - [ ] Replay every patch against current pinned upstream candidates and delete patches made obsolete by upstream changes.
 - [ ] Submit or track generally useful changes in LeRobot, XPolicyLab, RoboDojo, Arena or their actual owner repository.
 - [ ] Turn accepted upstream changes into bundle revision updates and removal of the corresponding overlay.
+- [ ] Keep rejected or out-of-scope reference integrations runnable in crossrun when their measured value exceeds their maintenance cost; rejection alone is not a deletion trigger.
 - [ ] Pin Genie Sim revisions and inventory file-level licenses only if G2 remains the selected hardware path.
 - [ ] Publish negative results, rejected integrations, upstream disposition and remaining patch ownership.
-- [ ] Demonstrate that the useful surface of crossrun is still bundles, conformance and evidence rather than a duplicate simulator, policy catalog or episode framework.
+- [ ] Demonstrate that each crossrun-owned implementation is a coherent cross-project reference path rather than an unattributed duplicate simulator, policy catalog or benchmark.
 
 ### 9.1 Phase 0 continuation gate
 
-crossrun is an integration distribution, not a platform that must exist forever. After Phase 0, continue as a standalone repository only while it makes selected multi-upstream paths materially faster and more reproducible than assembling them ad hoc:
+crossrun is an integration distribution and incubator, not a platform that must exist forever. After Phase 0, continue as a standalone repository while it makes selected multi-upstream paths materially faster, more reproducible or architecturally better than assembling them ad hoc:
 
 - a clean checkout materializes both Phase-0 paths at exact revisions without manual source edits;
 - versioned compatibility profiles and provenance catch real policy/environment mismatches that upstream launch scripts do not;
 - native upstream execution output is preserved while a common evidence envelope enables reproducible comparison;
-- every overlay replays cleanly, has a named owner and fixture, and has an upstream disposition and removal condition;
-- total patch debt remains small enough to review during every upstream sync.
+- every overlay or reference integration has a named owner, fixture, lifecycle intent and reassessment condition;
+- at least one best-practice hypothesis can be implemented and compared here without waiting for coordinated acceptance across upstream repositories;
+- total patch and reference-code cost remains small enough to review during every upstream sync.
 
-If upstreams provide a coherent replacement, crossrun removes the affected plugin or patch and narrows to the remaining bundles, conformance fixtures and documentation. A local episode loop must be deleted when its named upstream gap closes. If most work becomes permanent source-level adaptation of upstream internals, the thin-distribution premise has failed and the affected integration should move to a maintained fork or upstream repository.
+If upstreams provide a coherent replacement, crossrun removes the superseded plugin or patch and narrows to the remaining bundles, reference integrations, conformance fixtures and documentation. A local implementation is deleted when its hypothesis fails or an upstream path replaces it without losing the measured benefit. It may remain when it provides valuable cross-project composition that no single upstream is positioned to own. Permanent, fragile adaptation of private upstream internals is still a signal to redesign the boundary or move the work to a maintained fork.
 
 ### 9.2 XPolicyLab upgrade gate
 
@@ -659,8 +715,11 @@ An upstream addition is not automatically enabled merely because it exists in th
 | Risk | Level | Response |
 |---|---|---|
 | **Multi-upstream release skew** | High | pin a bundle as one unit; upgrade through bundle fixtures rather than component availability |
-| **Patch drift or permanent patch burden** | High | replay every patch in CI; upstream general changes; enforce owner, review date and removal condition |
+| **Patch drift or permanent patch burden** | High | replay every patch in CI; upstream general changes; enforce owner, review date and reassessment condition |
 | **Fork becomes the default response** | High | require wrapper/plugin/patch evidence before escalation; measure fork delta at every sync |
+| **“Best practice” is assumed from branding** | High | require a native baseline and measured capability, fidelity, performance and maintenance comparison |
+| **Reference integration silently becomes a second benchmark** | High | name it separately; publish semantic limits; never inherit upstream leaderboard identity without conformance and owner agreement |
+| **Crossrun-owned code diverges from upstream internals** | High | integrate at public assets/APIs; pin revisions; move fragile source adaptations to a fork or redesign the boundary |
 | **XPolicyLab interface churn** | High | pin exact revisions; maintain consumption profile; regression-gated upgrades |
 | **Adapter quality varies by model** | High | conformance tests, known-good checkpoint run and provenance manifest |
 | **Remote-policy bridge cannot express a complex policy** | High | preserve native execution where possible; version a narrow extension and propose it upstream |
@@ -708,6 +767,8 @@ Open-source and non-commercial intent do not remove these obligations.
 | Option | Why not now |
 |---|---|
 | Build a universal crossrun episode framework first | duplicates maintained upstream loops before a concrete gap is measured |
+| Treat current upstream architecture as the ceiling | prevents cross-project ideas from being implemented and evaluated |
+| Propose a large upstream migration before it runs in crossrun | shifts design risk to maintainers and makes rejection likely without evidence |
 | Convert every checkpoint to one universal weight format | expensive, lossy and unnecessary for execution unification |
 | Require every model to become LeRobot-native | forces reimplementation or conversion before evaluation value is proven |
 | Treat XPolicyLab as a permanent public standard | it is one pinned optional service behind a versioned plugin |
@@ -739,6 +800,8 @@ These are measurements to make, not conclusions already reached.
 11. Can a second environment reproduce a matched task closely enough for an interpretable interaction study?
 12. Which upstream assets and weights can legally be redistributed, and which must be fetched by the user?
 13. Which Lightwheel-LIBERO tasks are close enough to original LIBERO tasks for a controlled environment-interaction study, after all semantic differences are recorded?
+14. Does an Arena-based RoboDojo reference path measurably improve composition, reuse, interoperability and upgrade cost after accounting for migration effort, performance and semantic drift?
+15. If that path is valuable but outside RoboDojo's scope, should it remain a crossrun integration or move to a dedicated maintained fork?
 
 ---
 

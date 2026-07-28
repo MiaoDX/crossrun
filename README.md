@@ -1,8 +1,8 @@
 # crossrun
 
-**Pinned upstreams. Small overlays. Reproducible sim and real runs.**
+**Pinned upstreams. Proven reference paths. Reproducible sim and real runs.**
 
-A short-cycle integration distribution for running and evaluating robot policies across simulation and hardware. crossrun pins known-good upstream revisions, carries the smallest necessary plugins or patches, launches isolated runtimes, checks compatibility, and records enough evidence to reproduce a run.
+A short-cycle integration distribution and best-practice incubator for running and evaluating robot policies across simulation and hardware. crossrun pins known-good upstream revisions, carries focused integrations or patches, launches isolated runtimes, checks compatibility, and records enough evidence to reproduce a run.
 
 > **Status: design phase.** The architecture is under validation; code has not started.
 
@@ -10,7 +10,7 @@ A short-cycle integration distribution for running and evaluating robot policies
 
 The robotics stack is moving quickly, but a working experiment still depends on an exact combination of policy code, checkpoint, environment, robot driver, processors, controller and launch configuration. Waiting for every upstream to converge blocks use; copying those projects creates permanent maintenance work.
 
-crossrun is the controlled middle ground: use upstream execution paths wherever they work, maintain temporary overlays where they do not, and continuously send generally useful fixes back upstream.
+crossrun is the controlled middle ground: preserve upstream execution paths as reproducible baselines, build better reference paths where current upstream architecture is limiting, and use evidence before deciding whether a change should move upstream, remain here, or be deleted.
 
 ```text
  upstream repos and artifacts
@@ -18,7 +18,7 @@ crossrun is the controlled middle ground: use upstream execution paths wherever 
                          │
                          ▼
              crossrun integration bundle
- lockfile · plugins · patch queue · launch · conformance
+ lockfile · reference integrations · patches · launch · conformance
                          │
                          ▼
  upstream-native execution owners
@@ -30,11 +30,11 @@ crossrun is the controlled middle ground: use upstream execution paths wherever 
        normalized provenance and comparison reports
 ```
 
-**Use the native owner first.** LeRobot owns its policies, environments, robot drivers and rollout loops. RoboDojo owns its benchmark lifecycle. XPolicyLab owns heterogeneous model adapters and remote policy serving. crossrun does not replace those owners merely to make the diagram uniform.
+**Keep the native owner as the baseline.** LeRobot owns its policies, environments, robot drivers and rollout loops. RoboDojo owns its benchmark lifecycle. XPolicyLab owns heterogeneous model adapters and remote policy serving. Their current architecture is the comparison point, not an automatic ceiling on what crossrun may implement.
 
-**Maintain overlays deliberately.** The initial distribution uses a pinned crossrun XPolicyLab fork because its policy catalog and dependency isolation are valuable while several service and Pi adapter gaps still require source changes. LeRobot integrations should begin as out-of-tree plugins. RoboDojo and Arena should be wrapped at their published boundaries and forked only when a proven blocker cannot be fixed externally.
+**Incubate before upstreaming.** The initial distribution uses a pinned crossrun XPolicyLab fork because its policy catalog and dependency isolation are valuable while several service and Pi adapter gaps still require source changes. LeRobot integrations can begin as out-of-tree plugins. A larger idea, such as expressing RoboDojo-style tasks through Isaac Lab-Arena, may first live as a crossrun reference integration so it can run, be measured and mature without depending on prior upstream acceptance.
 
-Every local delta has an upstream base revision, owner, regression fixture, upstream issue or PR, and review date. Production bundles never track a moving `main` branch.
+Every local delta has an upstream base revision, owner, regression fixture, lifecycle intent, upstream issue or PR where appropriate, and review date. Production bundles never track a moving `main` branch. A local implementation may remain when it demonstrates a coherent cross-project architecture that no single upstream owns, but it must remain pinned, tested and cheaper to maintain than the value it provides.
 
 Simulation and hardware may use different upstream execution owners. Reset source, success assessment, clock semantics, observation quality, control, safety, latency and recovery therefore remain explicit compatibility and evidence fields. The available real hardware is Unitree G1 and AgiBot G2; ALOHA remains simulation-only in the initial plan.
 
@@ -54,12 +54,14 @@ Prefer LeRobot's existing `lerobot-eval`, LIBERO and gym-aloha paths for the fir
 3. **Upgrade proof.** Change one upstream revision and show that patch replay plus conformance tests expose the compatibility delta.
 4. **Minimal real loop.** Reuse LeRobot's G1 support or a G2 plugin for a safety-bounded hardware run.
 5. **Environment interaction.** Keep original MuJoCo and adapted Isaac results separate while recording their semantic differences.
+6. **Best-practice comparison.** Run a RoboDojo-native baseline beside an Arena-based reference integration and measure whether Arena improves composition, reuse and maintenance enough to justify migration.
 
 ## Design constraints
 
-- Upstream-native execution loops remain the episode owners unless a measured gap proves that none can support the path.
-- Prefer wrapper, then plugin, then temporary patch, then fork; every escalation requires evidence.
+- Upstream-native execution loops remain reproducible baselines; reference integrations may use a different owner when they test a named architectural hypothesis.
+- For compatibility fixes, prefer wrapper, then plugin, then temporary patch, then fork; reference experiments choose the smallest shape that can test their architectural hypothesis.
 - Fork commits stay small, independently testable and suitable for upstream submission where generally useful.
+- Best-practice claims require an explicit comparison against the upstream-native baseline; newer architecture is not assumed better by name alone.
 - Policy integrations preserve original checkpoints when practical; conversion is optional and explicitly recorded.
 - Every runnable bundle declares policy/environment compatibility across observations, actions, normalization, timing, statefulness and controllers.
 - Evaluation records include upstream revisions, local deltas, checkpoint digests, environment identity, task revision, termination, safety events and success-label provenance.
