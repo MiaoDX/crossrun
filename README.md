@@ -18,7 +18,7 @@ crossrun is that execution layer.
                               │
                               │ model-specific adapter
                               ▼
-                   pinned XPolicyLab-compatible service
+                   pinned crossrun XPolicyLab fork
                    original runtimes and weights may stay intact
                               │
                               │ crossrun PolicyClient
@@ -32,7 +32,7 @@ crossrun is that execution layer.
                   LIBERO · ALOHA Sim · Isaac · hardware
 ```
 
-**XPolicyLab is the single default policy runtime boundary.** This does not require every model to use XPolicyLab-native weights or training code. Most integrations wrap the upstream runtime and checkpoint, then adapt observations, normalization, action semantics, reset behaviour, and capabilities to the pinned service profile.
+**XPolicyLab is the single default policy runtime boundary.** crossrun consumes a pinned build of its own XPolicyLab fork, regularly syncs the upstream remote, and sends generally useful patches upstream. This does not require every model to use XPolicyLab-native weights or training code. Most integrations wrap the upstream runtime and checkpoint, then adapt observations, normalization, action semantics, reset behaviour, and capabilities to the pinned service profile.
 
 **LeRobot has three explicit roles, none of which replaces the runner:**
 
@@ -47,20 +47,20 @@ Simulation and hardware share an episode lifecycle, but they are not equivalent.
 Two upstream-supported MuJoCo paths enter Phase 0:
 
 1. **LIBERO / Panda** with a LIBERO-tuned policy such as `pi05_libero` — benchmark reproduction, statistics, and perturbation evaluation.
-2. **ALOHA Sim** with an ALOHA-simulation policy such as `pi0_aloha_sim` — dual-arm actions, higher-frequency control, and a path structurally close to real ALOHA.
+2. **ALOHA Sim** with an OpenPI π0.5 ALOHA profile, initially evaluating `pi05_aloha` with `pi05_base` or a validated task-tuned checkpoint — dual-arm actions, higher-frequency control, and a path structurally close to real ALOHA.
 
 They use the same Runner and policy-service boundary, but different checkpoints, policy profiles, observation mappings, action spaces, and normalization statistics.
 
 ## Planned demos
 
-1. **One service, two embodiments.** Run LIBERO/Panda and ALOHA Sim through the same Runner and pinned XPolicyLab service boundary without moving episode logic into model adapters.
+1. **One service, two embodiments.** Run LIBERO/Panda and ALOHA Sim with π0.5 policies through the same Runner and pinned XPolicyLab-fork service boundary without moving episode logic into model adapters.
 2. **Protocol sensitivity.** Hold a checkpoint fixed while varying episode count, seeds, and perturbation tiers.
 3. **Backend interaction.** Report matched tasks separately by backend and measure policy-by-backend interactions.
 4. **Perturbation collapse.** Reproduce a high standard score that fails under a controlled perturbation.
 
 ## Design constraints
 
-- Production policy execution goes through one pinned XPolicyLab-compatible service boundary.
+- Production policy execution goes through one pinned service boundary built from the crossrun XPolicyLab fork.
 - The runner depends on internal contracts, not XPolicyLab internals, simulator packages, or robot drivers.
 - Policy adapters preserve original checkpoints when practical; weight conversion is optional and explicitly recorded.
 - Every policy ships a compatibility profile covering observations, actions, normalization, chunking, timing, statefulness, batching, and reset semantics.

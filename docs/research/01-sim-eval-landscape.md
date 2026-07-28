@@ -1,7 +1,7 @@
 # The Robot Sim Eval Open-Source Landscape
 
 > Surveyed July 2026 · the starting point for crossrun's design
-> ⚠️ Some judgements have since been corrected — see [README](README.md)
+> ⚠️ Some judgements have since been corrected — see [README](README.md). Clear factual and arithmetic corrections are applied in place.
 
 ## TL;DR
 
@@ -86,7 +86,7 @@
 
 ## F. Methodology and infrastructure
 
-- **Protocol design**: fixed seeds and initial states, success predicates, task tiering, episode counts (LIBERO commonly 500 per task and 2,000 per suite; RoboTwin 100 rollouts per task), and multi-seed averaging with confidence intervals.
+- **Protocol design**: fixed seeds and initial states, success predicates, task tiering, episode counts (the OpenVLA LIBERO protocol uses 50 rollouts per task, 500 per 10-task suite and 2,000 across four suites for one seed; RoboTwin commonly uses 100 rollouts per task), and multi-seed averaging with confidence intervals.
 - **Known problems**: seed-driven swings above 30 points; slow evaluation; memorisation overfitting; undocumented protocol details (seeds, normalisation statistics, physics-settling steps routinely omitted from papers); the sim2real gap; and correlation figures published by the platforms themselves.
 - **Unified harnesses**: vla-eval (arXiv:2603.13966) uses WebSocket + msgpack with Docker isolation, supports 14 simulation benchmarks and 6 model servers, shards episodes for up to 47× speedup, and archives the Docker image tag, seed, and episode count alongside results.
 - **VLA interfaces**: openpi's policy server, InternManip and RoboDojo's client-server designs, LeRobot's unified policy abstraction, and GR00T's PolicyServer — all converging on gRPC or WebSocket remote inference.

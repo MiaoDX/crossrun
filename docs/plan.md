@@ -1,10 +1,10 @@
-# crossrun — Design Document v2.4
+# crossrun — Design Document v2.5
 
 > **What this is**: an open-source reference design for running and evaluating robot policies in simulation and on hardware.
 > **Status**: design phase. The architecture is under validation; code has not started.
 > **Companion research**: see [`research/`](research/).
 
-**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit Runner-to-Backend contract. **v2.4 chooses one default policy runtime boundary: every production policy is served through a pinned XPolicyLab-compatible service, while original model runtimes and checkpoints may remain intact. It also adds ALOHA Sim beside LIBERO/Panda as a Phase-0 path and defines LeRobot's roles explicitly.**
+**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit Runner-to-Backend contract. v2.4 chose one default policy runtime boundary and added ALOHA Sim beside LIBERO/Panda. **v2.5 defines that boundary as a pinned crossrun-maintained XPolicyLab fork, aligns the consumption profile with the actual upstream wire lifecycle, and makes Phase 0 π0.5-only across both embodiments.**
 
 ---
 
@@ -33,7 +33,7 @@ The project is not another simulator, benchmark, model zoo, training framework, 
 
 ### 2.1 One default policy runtime
 
-All production policy execution goes through a **pinned XPolicyLab-compatible service**.
+All production policy execution goes through a **pinned build of the crossrun XPolicyLab fork**.
 
 This is a runtime and serving decision, not a weight-format decision. A policy integration may keep:
 
@@ -52,7 +52,7 @@ The model-specific adapter translates between the upstream runtime and the consu
              │ XPolicyLab model adapter
              │ observation/action transforms
              ▼
- pinned XPolicyLab-compatible service
+ pinned crossrun XPolicyLab fork
              │
              │ crossrun XPolicyLabPolicyClient
              ▼
@@ -63,7 +63,20 @@ The rule is therefore:
 
 > **Unify executable policy lifecycle and metadata; do not require universal checkpoint conversion.**
 
-### 2.2 Why XPolicyLab is the default
+### 2.2 Fork and upstream strategy
+
+`XPolicyLab-compatible` has a concrete meaning in this project:
+
+- crossrun maintains its own fork of XPolicyLab;
+- each release pins both the upstream base revision and the fork revision;
+- the fork regularly syncs the upstream remote through reviewed changes;
+- crossrun-only patches stay small and are proposed upstream when generally useful;
+- production does not track either upstream `main` or the fork branch implicitly;
+- the Runner talks only to the versioned service profile, never to fork internals.
+
+This is not an unmodified-upstream guarantee and it does not add a separate gateway. The fork owns the service-side changes needed for capability reporting, validation and operational behaviour. If a patch cannot reasonably live in the fork, the design must say which process owns it before implementation.
+
+### 2.3 Why XPolicyLab is the default
 
 The project begins with many heterogeneous checkpoints from different repositories. They may require incompatible Python, CUDA, Transformers, simulator, C++ or system dependencies. XPolicyLab's model-per-environment and client-server structure is a better match for this intake problem than requiring every model to be reimplemented in one process.
 
@@ -73,7 +86,7 @@ Its current strengths are:
 - model-side dependency isolation;
 - remote or same-machine serving;
 - observation/action dictionary conventions;
-- single and batched inference lifecycle methods;
+- model-side single and batch-shaped inference methods;
 - a contribution path focused on wrapping upstream models.
 
 Its weaknesses remain explicit:
@@ -83,34 +96,51 @@ Its weaknesses remain explicit:
 - some stateful policies already need lifecycle extensions beyond the common methods;
 - adapter quality and checkpoint reproducibility vary by policy.
 
-Consequently, crossrun pins a reviewed revision and consumes only a documented subset. Phase 0 starts from a reviewed XPolicyLab revision—initially `061093b45bc1b323ed2ce0e50bfa6eb737858a8e`—and upgrades only through the regression gate in §9.
+Consequently, crossrun pins a reviewed upstream base and fork revision and consumes only a documented subset. Phase 0 starts from upstream base `061093b45bc1b323ed2ce0e50bfa6eb737858a8e` and upgrades only through the regression gate in §9.
 
-### 2.3 Consumption profile, not a competing standard
+**Upstream check, 2026-07-28.** XPolicyLab `main` was `5071d8ff557f8f258e50aec5b46a701772bc3295`. Its model lifecycle, WebSocket messages and `Pi_0`/`Pi_05` adapters were unchanged from the pinned base. The model API exposes batch-shaped methods, but the WebSocket client still implements a batch request as sequential single-item `infer` calls. The existing Pi adapters also require `cam_high`, `cam_left_wrist` and `cam_right_wrist`; this is narrower than OpenPI's ALOHA input transform, where wrist cameras may be absent and masked. Their vendored OpenPI config contains RoboDojo-specific ALOHA entries but not the public `pi05_aloha` or `pi05_libero` configs, even though the `Pi_05` adapter defaults to `pi05_aloha`. The crossrun fork must repair and test this adapter/runtime mismatch; it is a good upstream PR candidate.
+
+### 2.4 Consumption profile, not a competing standard
 
 crossrun records the exact XPolicyLab methods and payload shapes it consumes in a versioned internal profile.
 
 ```yaml
 profile: crossrun-xpolicylab-v1
-upstream_revision: 061093b45bc1b323ed2ce0e50bfa6eb737858a8e
+upstream_base_revision: 061093b45bc1b323ed2ce0e50bfa6eb737858a8e
+fork_revision: required
 
-required_model_lifecycle:
-  - reset
-  - update_obs
-  - get_action
+upstream_model_lifecycle:
+  required:
+    - reset
+    - update_obs
+    - get_action
+  optional:
+    - update_obs_batch
+    - get_action_batch
+    - prepare_case
+    - on_trial_end
 
-optional_model_lifecycle:
-  - update_obs_batch
-  - get_action_batch
-  - begin_episode
-  - step
+upstream_wire_messages:
+  required:
+    - hello
+    - reset
+    - infer
+    - trial_end
+    - heartbeat
 
-crossrun_requirements:
-  - health reporting
+fork_service_extensions:
+  - health and version reporting
   - declared capabilities
   - request deadlines
   - bounded queues
   - schema and size validation
   - explicit error categories
+
+crossrun_lifecycle:
+  - reset
+  - begin_episode
+  - predict
+  - end_episode
 ```
 
 The profile is not advertised as an ecosystem protocol. It exists to:
@@ -120,7 +150,9 @@ The profile is not advertised as an ecosystem protocol. It exists to:
 - keep the Runner independent from XPolicyLab internals;
 - permit a future runtime replacement without rewriting episode logic.
 
-### 2.4 What happens when a model does not fit
+The profile must not call a loop of single-item requests "batched inference". Transport batching is declared only after one request reaches a model-side batch implementation.
+
+### 2.5 What happens when a model does not fit
 
 A model must not hide important semantics inside arbitrary dictionary fields merely to appear compatible.
 
@@ -140,7 +172,7 @@ For a conventional policy, the adapter implements the common observation-update,
 
 For a stateful planner, world-action model, memory policy or multi-stage agent, one of two things happens:
 
-1. map its lifecycle to a documented optional extension such as `begin_episode` and `step`; or
+1. map its lifecycle to documented crossrun lifecycle calls such as `begin_episode` and `predict`; or
 2. extend the internal service profile after demonstrating that the existing lifecycle loses required semantics.
 
 Failure to fit is evidence about the runtime boundary, not a reason to put model-specific episode logic into the Runner.
@@ -164,7 +196,7 @@ LeRobot implements policies through `PreTrainedPolicy`, policy configs and pre/p
       XPolicyLabLeRobotModel
                 │
                 ▼
-    XPolicyLab-compatible service
+    crossrun XPolicyLab fork service
 ```
 
 The bridge is generic only at the LeRobot boundary. Individual policies may still require their plugin package and dependencies in the service environment.
@@ -213,16 +245,16 @@ Each claim must be visible in code and paired with evidence.
 
 ## 5. Initial runnable paths
 
-Phase 0 uses two upstream-supported MuJoCo paths. They exercise different policy and embodiment semantics while sharing the same Runner and policy-service boundary.
+Phase 0 uses two upstream-supported MuJoCo environments with π0.5 policies. They exercise different embodiment semantics while sharing the same model family, Runner and policy-service boundary.
 
 | Path | Representative upstream config | Observation/action shape | Primary purpose |
 |---|---|---|---|
 | **LIBERO / Panda** | OpenPI `pi05_libero` or another public LIBERO checkpoint | single-arm state, third-person + wrist images, 7-D relative EEF/gripper action | benchmark reproduction, statistics, perturbations |
-| **ALOHA Sim** | OpenPI `pi0_aloha_sim` | dual-arm state, ALOHA cameras, 14-D joint/gripper action | embodiment variation, 50 Hz control, sim-to-real-shaped lifecycle |
+| **ALOHA Sim** | OpenPI `pi05_aloha` with `pi05_base`, or a validated π0.5 task-tuned checkpoint | 14-D dual-arm state, ALOHA cameras, 14-D absolute joint/gripper action | embodiment variation, 50 Hz control, sim-to-real-shaped lifecycle |
 
 The two paths do **not** share a checkpoint or policy profile. They share:
 
-- the XPolicyLab-compatible service lifecycle;
+- the crossrun XPolicyLab-fork service lifecycle;
 - the crossrun `PolicyClient`;
 - the Runner state machine;
 - evaluation and provenance infrastructure.
@@ -237,6 +269,10 @@ They differ in:
 - control frequency and chunk execution.
 
 This distinction is essential: “same runtime boundary” does not mean “same checkpoint works on every robot.”
+
+The raw policy inputs are intentionally different. OpenPI's LIBERO transform consumes an 8-D state, one third-person image and one wrist image, then returns a 7-D relative end-effector/gripper action. Its ALOHA transform consumes a 14-D joint/gripper state, requires `cam_high`, optionally consumes left and right wrist images, and returns a 14-D absolute joint/gripper action. Both are padded and mapped to the model's internal 32-D state/action width and three image slots only after the embodiment-specific transform.
+
+`pi05_aloha` with `pi05_base` is an upstream-supported zero-shot ALOHA candidate, not a published ALOHA Sim task-tuned baseline. Phase 0 must select a task/checkpoint pair through a smoke test before treating success rate as meaningful. If zero-shot performance is not usable, the path requires a public or locally trained π0.5 ALOHA checkpoint; it does not fall back to π0 merely to reuse `pi0_aloha_sim`.
 
 ### 5.1 Baseline snapshot
 
@@ -262,7 +298,7 @@ The table below is a dated survey snapshot, not a compatibility guarantee.
 └──────────────────────────┬──────────────────────────────────┘
                            │ model adapter
 ┌──────────────────────────▼──────────────────────────────────┐
-│ Pinned XPolicyLab-compatible service                        │
+│ Pinned crossrun XPolicyLab fork service                      │
 │ isolated dependencies · lifecycle · capability declaration  │
 └──────────────────────────┬──────────────────────────────────┘
                            │ XPolicyLabPolicyClient
@@ -300,18 +336,20 @@ class Backend(Protocol):
 
 `XPolicyLabPolicyClient` maps these calls to the pinned service profile. The Runner never imports XPolicyLab model classes.
 
+`deadline_ns` is an end-to-end Runner deadline, not merely a client socket timeout. On expiry, the Runner rejects any late response using episode/request identity, terminates the trial, and calls `Backend.stop` without waiting for the policy service. A policy declares `supports_cancellation: true` only if the service confirms that the underlying inference was interrupted. Otherwise, a supervisor terminates and restarts the isolated policy process before another episode; stateful inference requests are never retried transparently.
+
 ### 6.2 Policy profile
 
 Every runnable checkpoint has a machine-readable profile:
 
 ```yaml
-policy_id: openpi/pi0_aloha_sim
-model_family: pi0
+policy_id: openpi/pi05_aloha_zero_shot_candidate
+model_family: pi05
 provider_runtime: openpi
-service_adapter: xpolicylab/openpi
+service_adapter: crossrun-xpolicylab/Pi_05
 
 checkpoint:
-  uri: gs://openpi-assets/checkpoints/pi0_aloha_sim
+  uri: gs://openpi-assets/checkpoints/pi05_base
   digest: required
   source_revision: required
 
@@ -327,11 +365,12 @@ action:
   dimension: 14
   semantics: absolute_joint_position
   units: declared
-  chunk_horizon: 10
+  predicted_chunk_horizon: 50
 
 execution:
   control_hz: 50
-  stateful: true
+  open_loop_steps: 10
+  stateful: false
   batching: false
 
 normalisation:
@@ -339,7 +378,7 @@ normalisation:
   digest: required
 ```
 
-The exact values above are illustrative until pinned by the implementation. The schema requirement is not.
+The profile above is a candidate grounded in the current OpenPI defaults. The task, prompt, checkpoint suitability, digests and open-loop execution length remain unvalidated until the Phase-0 smoke test. The schema requirement is not provisional.
 
 ### 6.3 Backend capabilities
 
@@ -443,9 +482,12 @@ trial_id and run_id
 task and task-definition revision
 seed and initial-condition identifier
 policy profile and service-profile revision
-upstream runtime revision
+crossrun revision and complete run-config digest
+XPolicyLab upstream-base revision and fork revision
+policy and backend adapter revisions
+upstream model runtime revision and dependency-lock digest
 checkpoint digest and conversion lineage
-container digest
+container or process-environment digest
 normalisation-statistics digest
 backend, backend version and physics configuration
 perturbation tier and parameters
@@ -455,6 +497,8 @@ safety events and interventions
 success label, source, classifier version, confidence and audit state
 trajectory or trajectory digest
 ```
+
+The immutable run manifest contains the full command, service launch parameters, resolved profiles and configuration files. `TrialRecord` references its digest so local source mounts and non-container development runs remain attributable.
 
 ---
 
@@ -511,15 +555,15 @@ A learned classifier is a measurement instrument, not ground truth. Hardware rep
 
 ### Phase 0 — one service, two MuJoCo paths
 
-- [ ] Pin the reviewed XPolicyLab revision and write `crossrun-xpolicylab-v1`.
+- [ ] Create the crossrun XPolicyLab fork, pin upstream-base and fork revisions, and write `crossrun-xpolicylab-v1`.
 - [ ] Implement `PolicyClient`, `Backend`, `PolicyProfile`, `BackendCapabilities`, `StepResult` and `TrialRecord`.
 - [ ] Implement `XPolicyLabPolicyClient` without importing model implementations into crossrun.
-- [ ] Bring up **LIBERO/Panda + `pi05_libero`** through the pinned service.
-- [ ] Bring up **ALOHA Sim + `pi0_aloha_sim`** through the same service and Runner.
+- [ ] Adapt **LIBERO/Panda + `pi05_libero`** to the fork service and reproduce a known-good baseline.
+- [ ] Smoke-test **ALOHA Sim + `pi05_aloha`/`pi05_base`**, select a meaningful π0.5 task/checkpoint pair, and adapt it to the same service and Runner.
 - [ ] Demonstrate that only profiles and adapters differ; episode logic remains unchanged.
 - [ ] Implement compatibility preflight and reject intentional mismatch fixtures.
 - [ ] Implement provenance, trajectory digests and confidence intervals.
-- [ ] Add schema validation, deadlines, bounded queues and loopback-only defaults.
+- [ ] Add schema/size validation, deadlines, bounded queues, loopback-only defaults and supervised process restart after non-cancellable inference timeout.
 
 ### Phase 1 — policy intake
 
@@ -558,21 +602,23 @@ A learned classifier is a measurement instrument, not ground truth. Hardware rep
 
 ### 9.1 XPolicyLab upgrade gate
 
-Never track XPolicyLab `main` implicitly. An upgrade is a separate change with:
+Never track XPolicyLab `main` implicitly. An upstream sync into the crossrun fork is a separate change with:
 
 1. an old-to-new consumption-profile diff;
 2. adapter static checks;
 3. debug closed-loop checks;
 4. end-to-end regression on:
    - π0.5 + LIBERO/Panda;
-   - π0 + ALOHA Sim;
+   - π0.5 + ALOHA Sim;
    - one LeRobot-native policy through the generic bridge;
    - one stateful or world-action policy;
    - one non-batched policy;
 5. performance measurements for latency, throughput and memory;
 6. result comparison against the previous pinned service revision.
 
-An upstream addition is not automatically enabled merely because it exists in the XPolicyLab catalog.
+During bootstrap, the gate runs every fixture that exists at the current phase and records later-phase fixtures as unavailable, not passed. Each fixture becomes mandatory as soon as its phase lands and can never be silently removed from the gate. A security-only sync may use this scoped gate, but still requires a profile diff, the current fixtures and an explicit rollback revision.
+
+An upstream addition is not automatically enabled merely because it exists in the XPolicyLab catalog. Fork patches are rebased deliberately, and conflicts are resolved as product changes rather than hidden merge maintenance.
 
 ---
 
@@ -581,6 +627,7 @@ An upstream addition is not automatically enabled merely because it exists in th
 | Risk | Level | Response |
 |---|---|---|
 | **XPolicyLab interface churn** | High | pin exact revisions; maintain consumption profile; regression-gated upgrades |
+| **Fork drift or permanent patch burden** | High | keep patches small; upstream general changes; measure patch delta at every sync |
 | **Adapter quality varies by model** | High | conformance tests, known-good checkpoint run and provenance manifest |
 | **Runtime boundary cannot express a complex policy** | High | capability extensions; do not leak policy logic into Runner |
 | **Checkpoint/model-family confusion** | High | immutable policy profiles and compatibility preflight |
@@ -599,7 +646,8 @@ An upstream addition is not automatically enabled merely because it exists in th
 - network allow-lists and explicit remote-mode configuration;
 - request deadlines, rate limits and bounded queues;
 - least-privilege containers or processes;
-- health checks and a fail-safe stop path when the policy service is unavailable.
+- health checks and a fail-safe stop path when the policy service is unavailable;
+- reject late responses by episode/request identity and restart the isolated service after a non-cancellable timeout.
 
 ### 10.2 Licensing baseline
 
@@ -641,14 +689,14 @@ Open-source and non-commercial intent do not remove these obligations.
 
 These are measurements to make, not conclusions already reached.
 
-1. Which exact XPolicyLab methods and transport messages should `crossrun-xpolicylab-v1` pin?
-2. Is the selected XPolicyLab revision reliable under concurrent batched load, timeout and cancellation?
-3. Which stateful policies require `begin_episode`/`step` rather than the common update/query lifecycle?
+1. Which fork extensions should be proposed upstream immediately, and which remain crossrun-specific?
+2. Is the selected XPolicyLab fork revision reliable under concurrent load, true transport batching, timeout and supervised restart?
+3. Which stateful policies require lifecycle semantics beyond reset, predict and end-episode?
 4. How much of the LeRobot policy catalog can one generic bridge cover without policy-specific code?
 5. Can converted and original-runtime versions of the same model be shown behaviourally equivalent on fixed observations?
 6. Which fields are sufficient for a safe policy/backend compatibility preflight?
 7. How should action chunks be resampled when service and backend frequencies differ?
-8. Which ALOHA Sim task/checkpoint pair is the best stable Phase-0 baseline?
+8. Does `pi05_aloha` with `pi05_base` produce a meaningful ALOHA Sim smoke test, and if not, which π0.5 task-tuned checkpoint should Phase 0 use?
 9. Which real ALOHA hardware configuration matches available public checkpoints closely enough for a meaningful run?
 10. Which XPolicyLab adapters have a publicly reproducible known-good result rather than only a wiring check?
 11. Can a second backend reproduce a matched task closely enough for an interpretable interaction study?
