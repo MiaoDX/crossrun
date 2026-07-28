@@ -1,10 +1,10 @@
-# crossrun — Design Document v2.5
+# crossrun — Design Document v2.6
 
 > **What this is**: an open-source reference design for running and evaluating robot policies in simulation and on hardware.
 > **Status**: design phase. The architecture is under validation; code has not started.
 > **Companion research**: see [`research/`](research/).
 
-**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit Runner-to-Backend contract. v2.4 chose one default policy runtime boundary and added ALOHA Sim beside LIBERO/Panda. **v2.5 defines that boundary as a pinned crossrun-maintained XPolicyLab fork, aligns the consumption profile with the actual upstream wire lifecycle, and makes Phase 0 π0.5-only across both embodiments.**
+**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit Runner-to-Backend contract. v2.4 chose one default policy runtime boundary and added ALOHA Sim beside LIBERO/Panda. v2.5 defined that boundary as a pinned crossrun-maintained XPolicyLab fork, aligned the consumption profile with the actual upstream wire lifecycle, and made Phase 0 π0.5-only across both embodiments. **v2.6 treats XPolicyLab's existing policy catalog as upstream inventory rather than work to duplicate, aligns the first hardware loop with the available Unitree G1 and AgiBot G2 robots, and distinguishes Isaac ports from original LIBERO/ALOHA benchmarks.**
 
 ---
 
@@ -274,7 +274,15 @@ The raw policy inputs are intentionally different. OpenPI's LIBERO transform con
 
 `pi05_aloha` with `pi05_base` is an upstream-supported zero-shot ALOHA candidate, not a published ALOHA Sim task-tuned baseline. Phase 0 must select a task/checkpoint pair through a smoke test before treating success rate as meaningful. If zero-shot performance is not usable, the path requires a public or locally trained π0.5 ALOHA checkpoint; it does not fall back to π0 merely to reuse `pi0_aloha_sim`.
 
-### 5.1 Baseline snapshot
+### 5.1 Isaac ports are separate backends
+
+An Isaac robot asset or a similarly named task does not reproduce an original MuJoCo benchmark. A port changes physics, rendering, assets, reset distributions, cameras, controllers and often success predicates. crossrun therefore gives every port its own backend and task revision and never pools its result with the original benchmark.
+
+**Upstream check, 2026-07-28.** Isaac Lab-Arena `main` at `99b557d0d7473d7fc81c0d64308e744899f68ad8` provides Franka and G1 embodiments and links to Lightwheel's LW-BenchHub. LW-BenchHub `main` at `b2bcb2d00edef691f9fcc49039cbf0bcc7464605` advertises 130 **adapted** Lightwheel-LIBERO tasks on Isaac Lab-Arena, including datasets for G1 and other robots. This is a useful second-backend candidate, but it is not the original LIBERO environment or a drop-in replacement for the `pi05_libero` baseline.
+
+RoboDojo `main` at `e0703b03bb1af6075400e9d60dc17a792793960c` uses native Isaac Sim task, scene, robot and success-condition configurations. It includes a Franka robot and 42 simulated tasks, but no LIBERO benchmark implementation and no ALOHA robot or environment. XPolicyLab supplies policy-side adapters and a client-server boundary; it does not turn those RoboDojo tasks into LIBERO or ALOHA. No current XPolicyLab/RoboDojo path supports treating ALOHA Sim as an Isaac backend. Such a path would require an ALOHA articulation/USD, cameras, controller and action mapping, task/reset definitions, success predicates, and a separately validated checkpoint profile.
+
+### 5.2 Baseline snapshot
 
 The table below is a dated survey snapshot, not a compatibility guarantee.
 
@@ -286,6 +294,8 @@ The table below is a dated survey snapshot, not a compatibility guarantee.
 | LeRobot | native policies, LIBERO env, ALOHA env, robot drivers | generic policy bridge, hardware backend, dataset interchange |
 | XPolicyLab | policy zoo and adapter lifecycle | pinned default service runtime |
 | GR00T / WBC / SONIC | embodiment-specific policy and controller stacks | separate policy/runtime, decoder and backend/controller validation |
+
+**Policy-catalog check, 2026-07-28.** XPolicyLab `main` at `5071d8ff557f8f258e50aec5b46a701772bc3295` already contains adapters for OpenVLA-OFT, SmolVLA, GR00T N1.7, DreamZero, AHA-WAM, FastWAM, GigaWorldPolicy, Mem-0, X-WAM and other policy families. Catalog presence proves neither checkpoint compatibility nor a published baseline. Phase 1 consumes representative existing adapters first, runs crossrun conformance and baseline checks, and patches only concrete gaps. Generally useful fixes go upstream; crossrun continues to own manifests, lifecycle compatibility and evaluation evidence.
 
 ---
 
@@ -567,26 +577,30 @@ A learned classifier is a measurement instrument, not ground truth. Hardware rep
 
 ### Phase 1 — policy intake
 
-- [ ] Add an OpenVLA or OpenVLA-OFT checkpoint through its original runtime.
-- [ ] Build `XPolicyLabLeRobotModel` for LeRobot-native `PreTrainedPolicy` checkpoints.
-- [ ] Validate one LeRobot-native checkpoint against its published baseline.
-- [ ] Add one world-action or memory/planning policy with declared stateful capabilities.
+- [ ] Inventory representative XPolicyLab adapters and classify each as wiring-only, reproducible baseline, or crossrun-conformant.
+- [ ] Validate one existing OpenVLA/OpenVLA-OFT adapter against a published baseline; patch or extend it only where the fork's service profile requires it.
+- [ ] Validate one existing LeRobot-native adapter such as SmolVLA before deciding whether a generic `XPolicyLabLeRobotModel` removes real per-policy duplication.
+- [ ] Validate one existing world-action or memory/planning adapter with declared stateful capabilities.
 - [ ] Test a policy that does not support batching.
 - [ ] Test server crash, timeout, malformed payload, stale observation and cancellation behaviour.
 - [ ] Publish an adapter checklist and conformance report for every policy.
+- [ ] Upstream generally useful adapter/runtime fixes and keep crossrun-only manifest or lifecycle policy in the fork.
 
 ### Phase 2 — claims and minimal hardware loop
 
 - [ ] Protocol/sample-size sensitivity demo.
 - [ ] Controlled perturbation-collapse demo.
 - [ ] Implement a RealRunner skeleton with manual reset guidance.
-- [ ] Use LeRobot's `Robot` abstraction for one hardware backend where practical.
+- [ ] Inventory the exact available G1 and G2 configurations: cameras, hands, controllers, emergency-stop path, control frequency and checkpoint compatibility.
+- [ ] Select one minimal static-manipulation hardware path from G1 or G2; prefer G1 only if its public controller and policy profile match the physical configuration more closely.
+- [ ] Use LeRobot's `Robot` abstraction only where its driver covers the selected hardware; otherwise implement a narrow native backend behind the same `Backend` contract.
 - [ ] Record success-label provenance, safety events and interventions from the first hardware run.
-- [ ] Test an ALOHA real path only with a checkpoint/profile matching the actual hardware configuration.
+- [ ] Keep the first hardware claim to lifecycle, safety and repeatability; do not claim sim-to-real capability from a wiring run.
 
 ### Phase 3 — second backend and whole-body control
 
-- [ ] Add a second implementation of a matched task only after task and control semantics are documented.
+- [ ] Evaluate Lightwheel-LIBERO on Isaac Lab-Arena as an explicitly adapted backend candidate; document task, reset, camera, controller and success-predicate differences before selecting a matched task.
+- [ ] Add a second implementation of a matched task only after those semantics are documented, and report it separately from the original LIBERO baseline.
 - [ ] Validate Arena's G1 path independently.
 - [ ] Validate GR00T-WBC/SONIC encoder, decoder, hands, cameras and controller independently.
 - [ ] Connect the stacks only after both run separately.
@@ -596,6 +610,7 @@ A learned classifier is a measurement instrument, not ground truth. Hardware rep
 
 - [ ] Pin Genie Sim source revisions and inventory file-level licenses.
 - [ ] Produce versioned G2 assets and scripts where redistribution is allowed.
+- [ ] Validate the G2 simulator/controller path against the exact available hardware configuration before running a closed-loop hardware evaluation.
 - [ ] Keep the default paths runnable without the upstream asset repository.
 - [ ] Publish negative results and rejected integrations, not only successful demos.
 - [ ] Consider EnvHub and upstream contributions after contracts survive multiple policies and backends.
@@ -697,10 +712,11 @@ These are measurements to make, not conclusions already reached.
 6. Which fields are sufficient for a safe policy/backend compatibility preflight?
 7. How should action chunks be resampled when service and backend frequencies differ?
 8. Does `pi05_aloha` with `pi05_base` produce a meaningful ALOHA Sim smoke test, and if not, which π0.5 task-tuned checkpoint should Phase 0 use?
-9. Which real ALOHA hardware configuration matches available public checkpoints closely enough for a meaningful run?
+9. Which exact G1 or G2 hardware configuration has the best-matched public controller, observation profile and checkpoint for the first minimal real run?
 10. Which XPolicyLab adapters have a publicly reproducible known-good result rather than only a wiring check?
 11. Can a second backend reproduce a matched task closely enough for an interpretable interaction study?
 12. Which upstream assets and weights can legally be redistributed, and which must be fetched by the user?
+13. Which Lightwheel-LIBERO tasks are close enough to original LIBERO tasks for a controlled backend-interaction study, after all semantic differences are recorded?
 
 ---
 

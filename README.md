@@ -40,7 +40,7 @@ crossrun is that execution layer.
 - a robot-driver backend through its `Robot` interface;
 - a dataset and trajectory interchange ecosystem.
 
-Simulation and hardware share an episode lifecycle, but they are not equivalent. Reset source, success assessment, and clock semantics are first-class orchestration seams. Observation quality, control semantics, safety, latency, and failure recovery remain backend capabilities.
+Simulation and hardware share an episode lifecycle, but they are not equivalent. Reset source, success assessment, and clock semantics are first-class orchestration seams. Observation quality, control semantics, safety, latency, and failure recovery remain backend capabilities. The available real hardware is Unitree G1 and AgiBot G2; ALOHA remains simulation-only in the initial plan.
 
 ## Initial paths
 
@@ -57,6 +57,7 @@ They use the same Runner and policy-service boundary, but different checkpoints,
 2. **Protocol sensitivity.** Hold a checkpoint fixed while varying episode count, seeds, and perturbation tiers.
 3. **Backend interaction.** Report matched tasks separately by backend and measure policy-by-backend interactions.
 4. **Perturbation collapse.** Reproduce a high standard score that fails under a controlled perturbation.
+5. **Minimal real loop.** Run a safety-bounded static-manipulation lifecycle on the better-matched available G1 or G2 configuration after hardware and checkpoint preflight.
 
 ## Design constraints
 
@@ -67,6 +68,7 @@ They use the same Runner and policy-service boundary, but different checkpoints,
 - Evaluation records include policy/runtime/checkpoint digests, backend/version, task revision, perturbation, termination, safety events, and success-label provenance.
 - Policy servers default to loopback. Remote serving requires authenticated transport, schema validation, and network isolation.
 - Every redistributed asset and model records its exact source revision and license obligations.
+- Isaac ports are versioned as distinct backends. Lightwheel-LIBERO is an adapted Isaac Lab-Arena benchmark and is never reported as the original MuJoCo LIBERO baseline.
 
 ## Docs
 
