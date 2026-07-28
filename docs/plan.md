@@ -1,56 +1,80 @@
-# crossrun — Design Document v2.8
+# crossrun — Design Document v2.9
 
-> **What this is**: a pinned integration distribution and best-practice incubator for running and evaluating robot policies in simulation and on hardware.
+> **What this is**: a simulation-first evaluation surface and best-practice incubator for robot policies across multiple physics backends.
 > **Status**: design phase. The architecture is under validation; code has not started.
 > **Companion research**: see [`research/`](research/).
 
-**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit execution/environment contract. v2.4 chose one default policy runtime boundary and added ALOHA Sim beside LIBERO/Panda. v2.5 defined that boundary as a pinned crossrun-maintained XPolicyLab fork and made Phase 0 π0.5-only. v2.6 aligned policy intake and hardware scope with current upstreams. v2.7 made crossrun an integration distribution around upstream-native execution, reproducible bundles and governed overlays. **v2.8 adds the other half of the project: crossrun may incubate and prove a better cross-project reference architecture before upstreams accept it, while retaining native paths as comparison baselines.**
+**Version history.** v1.x was scoped as an internal evaluation system. v2.0 reframed it as an open reference design. v2.1 added the execution layer. v2.2 selected XPolicyLab as a policy-side integration candidate. v2.3 corrected over-strong assumptions and added an explicit execution/environment contract. v2.4 chose one default policy runtime boundary and added ALOHA Sim beside LIBERO/Panda. v2.5 defined that boundary as a pinned crossrun-maintained XPolicyLab fork and made Phase 0 π0.5-only. v2.6 aligned policy intake and hardware scope with current upstreams. v2.7 made crossrun an integration distribution around upstream-native execution, reproducible bundles and governed overlays. v2.8 added best-practice reference integrations. **v2.9 reduces the roadmap to three simulation-first phases, gives crossrun a bounded Gymnasium-compatible sim-eval loop, targets MuJoCo, Isaac and Genesis adapters, and defers all real-robot implementation until the simulation gate passes.**
 
 ---
 
 ## 1. Positioning
 
-**In one line:** assemble fast-moving upstream projects into reproducible bundles and provide a place to prove better integration architecture before deciding where it should live long term.
+**In one line:** run one policy-evaluation loop against swappable MuJoCo, Isaac and Genesis environments while keeping every backend's semantics and provenance explicit.
 
-The project is not another simulator, benchmark, model zoo, training framework, universal policy protocol or mandatory episode loop. Its short-term value is:
+The project is not another simulator, benchmark, model zoo, training framework or universal sim/real runtime. It deliberately owns one bounded simulation-evaluation loop. Its short-term value is:
 
 1. exact upstream, checkpoint, container and asset revisions that work together;
 2. focused wrappers, plugins, reference integrations or fork commits for gaps and architectural experiments;
-3. explicit compatibility metadata between policies, environments and controllers;
-4. one launch and conformance surface across otherwise separate upstream tools;
+3. a Gymnasium-compatible sim interface with explicit backend capabilities;
+4. one evaluation, launch and conformance surface across otherwise separate upstream tools;
 5. evaluation records that preserve uncertainty, upstream identity and local modifications.
 
 **Deliverables, in priority order:**
 
-1. Reproducible integration bundles that run selected end-to-end paths.
+1. One reproducible π0.5 + LIBERO + MuJoCo result through the crossrun sim-eval loop.
 2. Conformance fixtures that make upstream updates and patch drift visible.
-3. Best-practice reference implementations evaluated against current upstream baselines.
-4. Generally useful fixes proposed to their natural upstream owners after they work in practice.
-5. A design and evidence record that explains why any remaining crossrun-owned code belongs here.
+3. MuJoCo, Isaac and Genesis adapters behind the same narrow interface.
+4. Best-practice reference implementations evaluated against current upstream baselines.
+5. Generally useful fixes proposed to their natural upstream owners after they work in practice.
 
-**Success looks like:** someone can materialize a clean workspace from one bundle manifest, launch both an upstream-native baseline and a selected reference path, and see exactly which architecture, revisions, transformations and assumptions produced each result.
+**Success looks like:** someone can materialize a bundle, evaluate a selected policy through one sim loop, change the backend in configuration, and receive a comparable evidence envelope that still exposes engine-specific differences.
 
 ---
 
 ## 2. Integration strategy
 
-### 2.1 Native baseline first
+### 2.1 One bounded sim-eval owner
 
-Every integration starts by preserving the maintained upstream path as a runnable baseline:
+crossrun owns the portable simulation-evaluation loop: episode reset, policy calls, action-chunk scheduling, termination, recording and evidence emission. The loop consumes one narrow simulation interface and does not import MuJoCo, Isaac or Genesis types.
 
-| Path | Default execution owner |
+Maintained upstream simulation paths remain runnable result baselines:
+
+| Native baseline path | Owner |
 |---|---|
 | LeRobot policy + supported simulator | `lerobot-eval` |
-| LeRobot policy + supported robot | `lerobot-rollout` and `Robot` |
 | RoboDojo benchmark | RoboDojo `EvalEnv` |
 | Heterogeneous original-runtime policy | XPolicyLab service, bridged into the selected environment owner |
 | Arena/EnvHub task | the Arena or EnvHub environment package plus its supported evaluator |
 
-For ordinary compatibility work, episode ownership stays with that upstream path. This avoids rewriting working lifecycle code merely to make projects look uniform.
+The crossrun path is considered correct only after it agrees with the selected native baseline on fixed observations, actions, seeds and termination semantics within declared tolerances. Upstream lifecycle code is not copied; backend adapters compose public environment APIs.
 
-The native baseline is not an architecture veto. crossrun may own a different execution path when it tests a named best-practice hypothesis that cannot be evaluated inside the current upstream architecture without a large, speculative change.
+This ownership is intentionally simulation-only. Hardware rollout, intervention, safety control and manual reset semantics stay outside the current milestone.
 
-### 2.2 Best-practice reference track
+### 2.2 Common simulation interface
+
+The common surface follows Gymnasium because LIBERO, gym-aloha, LeRobot and Isaac integrations already converge around its lifecycle. A backend adapter creates an environment that provides:
+
+```python
+class SimBackend(Protocol):
+    def capabilities(self, config: SimConfig) -> SimCapabilities: ...
+    def make(self, config: SimConfig) -> gym.Env | gym.vector.VectorEnv: ...
+```
+
+The returned environment uses standard Gymnasium fields:
+
+```text
+observation_space and action_space
+reset(seed, options) -> observation, info
+step(action) -> observation, reward, terminated, truncated, info
+render() and close()
+```
+
+`SimCapabilities` declares engine and version, devices, headless rendering, vectorisation, deterministic-seed level, control decimation, state snapshot support, privileged success access and native diagnostics. Backend-specific information stays under a namespaced `info` key and in the native result artifact.
+
+The interface standardises lifecycle, not physics or task meaning. A task/embodiment profile separately declares observations, actions, cameras, controllers, reset distribution and success semantics. Switching `backend: mujoco` to `backend: isaac` or `backend: genesis` is allowed only when a conformance fixture exists for that profile; otherwise it is a new environment condition.
+
+### 2.3 Best-practice reference track
 
 A reference integration is first-class work, not an accidental patch. It must state:
 
@@ -79,7 +103,7 @@ The implementation lands in crossrun first. Once it is runnable and measured:
 
 Upstream acceptance is an outcome, not a prerequisite for experimentation.
 
-### 2.3 Wrapper, plugin, patch, fork
+### 2.4 Wrapper, plugin, patch, fork
 
 Compatibility fixes escalate through the least expensive mechanism that works. A reference integration may deliberately use a larger mechanism when the architecture itself is the hypothesis:
 
@@ -106,9 +130,9 @@ exit_or_reassessment_condition: required
 
 No production machine contains an unrecorded manual edit. A clean checkout plus the bundle manifest must reproduce the full source state.
 
-### 2.4 The initial XPolicyLab fork
+### 2.5 The optional XPolicyLab fork
 
-crossrun maintains a pinned XPolicyLab fork because heterogeneous model dependencies and the existing adapter catalog are immediately useful, while service hardening and Pi adapter gaps currently require source-side changes. The fork:
+crossrun maintains a pinned XPolicyLab fork when a selected policy needs heterogeneous original-runtime serving and current service or Pi adapter gaps require source-side changes. It is an enabling dependency, not a phase or prerequisite for the first native π0.5 result. The fork:
 
 - regularly syncs a reviewed upstream remote;
 - keeps generally useful changes as clean topic commits suitable for upstream PRs;
@@ -118,19 +142,18 @@ crossrun maintains a pinned XPolicyLab fork because heterogeneous model dependen
 
 **Upstream check, 2026-07-28.** XPolicyLab `main` was `5071d8ff557f8f258e50aec5b46a701772bc3295`. Its model lifecycle and WebSocket implementation still lack declared capabilities, bounded payloads, end-to-end deadlines and true transport batching. The WebSocket client implements a batch request as sequential `infer` calls. The Pi adapters require all three ALOHA cameras even though OpenPI permits masked wrist cameras, and the vendored config does not include the public `pi05_aloha` or `pi05_libero` profiles. These are initial fork patches and upstream PR candidates, not permanent crossrun features.
 
-### 2.5 Bundle manifest and service profile
+### 2.6 Bundle manifest and service profile
 
 The bundle manifest is the top-level reproducibility unit. It pins every upstream and local delta and references narrower runtime profiles:
 
 ```yaml
-bundle: pi05-mujoco-v1
+bundle: pi05-libero-mujoco-v1
 crossrun_revision: required
 
 upstreams:
   lerobot: {revision: required}
   openpi: {revision: required}
   libero: {revision: required}
-  gym_aloha: {revision: required}
 
 optional_services:
   xpolicylab:
@@ -148,8 +171,9 @@ overlays:
 
 fixtures:
   - pi05_libero_smoke
-  - pi05_aloha_smoke
 ```
+
+ALOHA Sim is added as a second bundle or a later revision after the LIBERO result passes; its dependencies and fixture do not block materializing the first bundle.
 
 The XPolicyLab service profile records only the wire and lifecycle subset consumed by the bridge:
 
@@ -195,7 +219,7 @@ Neither manifest is advertised as an ecosystem standard. They exist to:
 
 The profile must not call a loop of single-item requests "batched inference". Transport batching is declared only after one request reaches a model-side batch implementation.
 
-### 2.6 What happens when a model does not fit
+### 2.7 What happens when a model does not fit
 
 A model must not hide important semantics inside arbitrary dictionary fields merely to appear compatible.
 
@@ -264,7 +288,7 @@ Each claim must be visible in code and paired with evidence.
 6. **Numbers ship with uncertainty and provenance.** A bare success rate is incomplete.
 7. **Perturbation evaluation is part of the baseline.** A standard score alone does not establish robustness.
 8. **Cross-environment results are stratified, not pooled.** Report environment-specific outcomes and analyse interactions.
-9. **Sim and real may use different execution owners.** Compatibility and evidence remain comparable without pretending their semantics are identical.
+9. **Hardware is an extension boundary, not current scope.** Shared profiles must not block a future real loop, but no real contract is invented before sim evidence exists.
 10. **A local episode loop is hypothesis-driven.** It may fill a concrete gap or test a better execution architecture, but must be compared with a native baseline.
 11. **Best practice is measured, not declared.** Adoption depends on capability, semantic fidelity, performance, interoperability and maintenance evidence.
 
@@ -272,7 +296,7 @@ Each claim must be visible in code and paired with evidence.
 
 ## 5. Initial runnable paths
 
-Phase 0 uses two upstream-supported MuJoCo environments with π0.5 policies. They exercise different embodiment semantics while sharing one bundle manifest and evidence schema. They do not need to share an episode loop or policy implementation.
+Phase 0 gets one complete result first: π0.5 on original MuJoCo LIBERO through the crossrun sim loop. ALOHA Sim follows as the second MuJoCo fixture to exercise different embodiment semantics without blocking the first result.
 
 | Path | Representative upstream config | Observation/action shape | Primary purpose |
 |---|---|---|---|
@@ -322,7 +346,7 @@ The table below is a dated survey snapshot, not a compatibility guarantee.
 | XPolicyLab | policy zoo and adapter lifecycle | pinned optional service for heterogeneous original runtimes |
 | GR00T / WBC / SONIC | embodiment-specific policy and controller stacks | separate policy/runtime, decoder and environment/controller validation |
 
-**Policy-catalog check, 2026-07-28.** XPolicyLab `main` at `5071d8ff557f8f258e50aec5b46a701772bc3295` already contains adapters for OpenVLA-OFT, SmolVLA, GR00T N1.7, DreamZero, AHA-WAM, FastWAM, GigaWorldPolicy, Mem-0, X-WAM and other policy families. Catalog presence proves neither checkpoint compatibility nor a published baseline. Phase 1 consumes representative existing adapters first, runs crossrun conformance and baseline checks, and patches only concrete gaps. Generally useful fixes go upstream; crossrun continues to own manifests, lifecycle compatibility and evaluation evidence.
+**Policy-catalog check, 2026-07-28.** XPolicyLab `main` at `5071d8ff557f8f258e50aec5b46a701772bc3295` already contains adapters for OpenVLA-OFT, SmolVLA, GR00T N1.7, DreamZero, AHA-WAM, FastWAM, GigaWorldPolicy, Mem-0, X-WAM and other policy families. Catalog presence proves neither checkpoint compatibility nor a published baseline. A selected bundle consumes an existing adapter first, runs crossrun conformance and baseline checks, and patches only a concrete blocking gap. Model-catalog expansion is not a roadmap phase.
 
 ---
 
@@ -331,34 +355,35 @@ The table below is a dated survey snapshot, not a compatibility guarantee.
 ```text
 Bundle manifest
   ├── exact upstream revisions and artifact digests
-  ├── overlays or reference-integration revision
-  ├── launch recipe and compatibility profile
-  └── expected evidence schema
-                 │
-                 ▼
+  ├── policy/checkpoint profile
+  ├── task/embodiment profile
+  └── backend configuration
+                  │
+                  ▼
 Materialize + compatibility preflight
-                 │
-        ┌────────┴────────┐
-        ▼                 ▼
-Native baseline       Reference integration
-LeRobot / RoboDojo    crossrun-owned Arena or
-Arena / EnvHub        other candidate architecture
-        └────────┬────────┘
-                 │
-       optional remote-policy bridge
-       to the pinned XPolicyLab fork
-                 │
-                 ▼
-Result adapter ──► evidence envelope ──► reports / datasets
+                  │
+       ┌──────────┴──────────┐
+       ▼                     ▼
+Policy endpoint        crossrun sim-eval loop
+native or optional     reset · predict · schedule
+XPolicyLab service     step · terminate · record
+       └──────────┬──────────┘
+                  │ Gymnasium-compatible SimBackend
+        ┌─────────┼─────────┐
+        ▼         ▼         ▼
+     MuJoCo   Isaac/Arena  Genesis
+        └─────────┬─────────┘
+                  ▼
+native artifact + evidence envelope ──► reports
 ```
 
-The execution owner and path class remain visible in every bundle and result. crossrun does not pretend that native and reference loops have identical scheduling, reset, timeout or intervention semantics. It normalises only the evidence needed for reproducibility and comparison, preserving each path's native output alongside the normalised envelope.
+The crossrun loop owns simulation episodes. The policy runtime and physics engine remain replaceable and visible in every result. Native upstream evaluation remains a separately launched baseline, not another hidden implementation of this loop. crossrun does not pretend that backend ports have identical reset, control or success semantics; it preserves engine-native output alongside the evidence envelope.
 
 ### 6.1 Required integration artifacts
 
 ```yaml
 source_lock:
-  repository: https://github.com/XPolicyLab/XPolicyLab
+  repository: required
   upstream_revision: required
   fork_revision: required_when_forked
 
@@ -379,8 +404,8 @@ reference_integration:
   comparison_report: required_when_applicable
 
 launch_recipe:
-  path_class: native_baseline | reference_integration
-  execution_owner: lerobot | robodojo | crossrun | arena | other
+  path_class: native_baseline | crossrun_sim_eval
+  execution_owner: lerobot | robodojo | crossrun | other
   entry_point: required
   dependency_lock_digest: required
   arguments_and_environment: recorded
@@ -395,7 +420,7 @@ result_adapter:
   evidence_schema_version: required
 ```
 
-`SourceLock` makes upstream identity reproducible. `Overlay` gives every local delta an accountable lifecycle. `ReferenceIntegration` binds an architectural hypothesis to its native baseline and comparison evidence. `LaunchRecipe` names the actual episode owner instead of assuming it is upstream. `CompatibilityProfile` rejects mismatched observations, actions and timing before launch. `ResultAdapter` adds crossrun evidence without discarding the source runtime's richer output.
+`SourceLock` makes upstream identity reproducible. `Overlay` gives every local delta an accountable lifecycle. `ReferenceIntegration` binds an architectural hypothesis to its native baseline and comparison evidence. `LaunchRecipe` distinguishes the crossrun sim loop from an upstream baseline. `CompatibilityProfile` rejects mismatched policies, tasks and backends before launch. `ResultAdapter` adds crossrun evidence without discarding the source runtime's richer output.
 
 A local execution loop may fill a measured upstream gap or test a named reference architecture. It must have conformance fixtures and a native comparison path. Its reassessment gate may lead to upstreaming, continued crossrun ownership, a dedicated fork or deletion.
 
@@ -447,6 +472,7 @@ Each environment declares matching properties:
 
 ```yaml
 environment_id: aloha_sim/gym_aloha
+backend: mujoco
 embodiment: aloha
 domain: simulation
 observation:
@@ -511,6 +537,10 @@ environment-specific diagnostics
 crossrun/
 ├── upstreams.lock.yaml        # exact upstream, fork and artifact identities
 ├── bundles/                   # runnable integration manifests
+├── eval/                      # bounded simulation episode loop
+├── sim/
+│   ├── interface/             # Gymnasium contract and capabilities
+│   └── backends/              # MuJoCo, Isaac/Arena and Genesis adapters
 ├── integrations/              # crossrun-owned best-practice reference paths
 ├── plugins/                   # installable extensions at upstream boundaries
 ├── patches/                   # small, reviewable and replayable deltas
@@ -528,7 +558,9 @@ crossrun/
 - Every production bundle pins exact source and artifact revisions; none tracks a moving branch.
 - Every local delta is an installable integration or plugin, replayable patch, or named fork commit; manual source edits are invalid.
 - Every reference integration names its native baseline, hypothesis, semantic limits, comparison dimensions and reassessment date.
-- Episode ownership stays explicit. Native bundles use the upstream owner; reference bundles may use crossrun code when that is the architecture under test.
+- Episode ownership stays explicit. Portable sim bundles use `eval/`; native-baseline bundles use their upstream owner.
+- `eval/` depends on the common sim interface, never directly on a physics engine or simulator package.
+- Backend adapters return Gymnasium-compatible environments and preserve native diagnostics under namespaced evidence.
 - Model-specific transforms stay with the policy runtime or a policy plugin; environment-specific transforms stay with the environment integration.
 - Result adapters preserve upstream-native records and add a versioned evidence envelope; they do not reduce output to a lossy `(success, trajectory)` tuple.
 - A clean checkout can materialize a bundle without relying on an unrecorded developer workspace.
@@ -537,7 +569,11 @@ crossrun/
 - Large binary assets and datasets live outside git with immutable hashes.
 - Policy servers default to loopback. Remote mode is explicit and authenticated.
 
-### 7.1 Minimum evidence identity
+### 7.1 Deferred hardware boundary
+
+The policy endpoint, observation/action profiles and evidence envelope avoid simulator-only assumptions so a future real-robot loop can reuse them. The repository may reserve configuration namespaces for Unitree G1 and AgiBot G2, but the current milestone does not define a `RealBackend`, robot driver, controller adapter or hardware episode loop. Those contracts are designed only after the simulation gate passes.
+
+### 7.2 Minimum evidence identity
 
 ```text
 trial_id and run_id
@@ -601,112 +637,82 @@ Standard and perturbed results are reported together. Perturbations record gener
 
 A collapse under one perturbation is evidence about that perturbation family, not a universal statement that the model has no capability.
 
-### 8.4 Hardware success labels
+### 8.4 Sim adapter acceptance
 
-A learned classifier is a measurement instrument, not ground truth. Hardware reports include:
+A backend adapter is accepted only when it:
 
-- classifier and prompt/configuration revision;
-- score and abstention behaviour;
-- a sampled human-audit set;
-- confusion estimates on the evaluated task distribution;
-- the policy for disagreements and uncertain outcomes.
+- passes reset, step, termination, truncation, render and close contract fixtures;
+- reports its capabilities and rejects unsupported configuration before launch;
+- reproduces a fixed action trace against its native environment within declared tolerances;
+- preserves engine-native diagnostics and failure reasons;
+- records seed behaviour, control timing and vectorisation semantics;
+- has one end-to-end policy rollout through the unchanged crossrun eval loop.
 
 ---
 
 ## 9. Scope and phases
 
-### Phase 0 — first reproducible bundle
+### Phase 0 — first sim result
 
-- [ ] Define `upstreams.lock.yaml`, the bundle schema, overlay metadata and the evidence envelope.
-- [ ] Publish a dated architecture decision matrix covering the selected policy runtime, serving, environment composition, evaluation and hardware-control practices; distinguish adopted choices from hypotheses that need a reference integration.
-- [ ] Materialize a clean pinned LeRobot/OpenPI environment without manual source edits.
-- [ ] Run **original LIBERO/Panda + `pi05_libero`** through its native LeRobot/OpenPI-supported entry point and reproduce a known-good baseline.
-- [ ] Smoke-test **gym-aloha ALOHA Sim + `pi05_aloha`/`pi05_base`** through its native entry point and select a meaningful π0.5 task/checkpoint pair before making a success-rate claim.
-- [ ] Keep these as two original MuJoCo paths. Isaac ports are explicitly outside Phase 0 and are never presented as the original benchmarks.
-- [ ] Implement compatibility preflight and intentional mismatch fixtures for both paths.
-- [ ] Preserve native output and add provenance, trajectory digests and confidence intervals through result adapters.
-- [ ] Prove that both paths rematerialize from a clean checkout at their pinned revisions.
+- [ ] Define the bundle, policy endpoint, Gymnasium-compatible `SimBackend`, MuJoCo adapter and evidence envelope.
+- [ ] Materialize a clean pinned LeRobot/OpenPI/LIBERO environment without manual source edits.
+- [ ] Reproduce **original LIBERO/Panda + `pi05_libero`** through the native evaluator as the baseline.
+- [ ] Run the same policy/checkpoint/task through the crossrun sim-eval loop and compare fixed-seed traces and termination semantics.
+- [ ] Add compatibility preflight, trajectory digests, failure categories and a small success-rate report.
+- [ ] Only after the LIBERO slice works, add ALOHA Sim as a second MuJoCo contract fixture with its own π0.5 profile; do not block the first result on ALOHA checkpoint quality.
+- [ ] Add XPolicyLab serving only if a selected policy cannot use a native endpoint; do not expand the policy catalog in this phase.
 
-### Phase 1 — XPolicyLab fork and remote-policy bridge
+**Exit:** one command or bundle produces a reproducible π0.5 + LIBERO result through crossrun, with the native baseline beside it.
 
-- [ ] Create the crossrun XPolicyLab fork, pin upstream-base and fork revisions, and define `crossrun-xpolicylab-v1`.
-- [ ] Harden capability discovery, health checks, deadlines, bounded payloads and queues, true batching semantics, and supervised recovery where current upstream behaviour is insufficient.
-- [ ] Implement an out-of-tree LeRobot remote-policy plugin so a native LeRobot rollout can consume the XPolicyLab service without moving episode ownership into crossrun.
-- [ ] Fix the π adapter's unconditional ALOHA-camera requirements and add public, fixture-backed `pi05_libero` and `pi05_aloha` profiles where the upstream maintainers accept them.
-- [ ] Inventory representative existing XPolicyLab adapters and classify each as wiring-only, reproducible baseline, or bundle-conformant.
-- [ ] Consume XPolicyLab's existing OpenVLA, SmolVLA, GR00T, world-action and memory-policy work before adding any overlapping integration.
-- [ ] Add crossrun code only for bundle lifecycle, interoperability or evidence gaps; submit generally useful adapter/runtime changes upstream.
-- [ ] Test crash, timeout, malformed payload, stale observation, stateful reset, cancellation and non-batched policy behaviour.
+### Phase 1 — backend switching
 
-XPolicyLab's expanding model catalog and crossrun Phase 1 are complementary only under this ownership rule: XPolicyLab owns model adapters and service behaviour; crossrun owns pinned consumption, the LeRobot bridge, compatibility fixtures and evidence. Duplicating a model adapter in crossrun is a conflict and must be removed or proposed upstream.
+- [ ] Add an Isaac adapter, preferring Isaac Lab-Arena composition for the crossrun reference path while retaining RoboDojo `EvalEnv` as a native baseline.
+- [ ] Add a Genesis adapter. Genesis is the physics engine; AgiBot Genie Sim remains outside the current milestone.
+- [ ] Select one narrow manipulation task/embodiment fixture that can be implemented on at least two engines with declared semantic limits.
+- [ ] Switch MuJoCo, Isaac and Genesis through bundle configuration without changing the policy endpoint or eval loop.
+- [ ] Run adapter contract tests and at least one end-to-end policy rollout on every backend.
+- [ ] Preserve separate result groups by engine and publish performance, determinism, vectorisation and semantic-drift evidence.
+- [ ] Complete the RoboDojo-native versus Arena-reference comparison on the narrow task slice.
+- [ ] Harden the optional XPolicyLab bridge only for failures observed in selected sim bundles.
 
-### Phase 2 — available G1 and G2 hardware
+**Exit:** all three adapters pass the common contract, and the unchanged eval loop has produced evidence on MuJoCo, Isaac and Genesis.
 
-- [ ] Inventory the exact available Unitree G1 and AgiBot G2 configurations: cameras, hands, controllers, emergency-stop path, control frequency and checkpoint compatibility.
-- [ ] Validate LeRobot's existing G1 sim and real support against the available 23- or 29-DoF configuration before writing an alternative driver.
-- [ ] For G2, first inventory Genie Sim, vendor SDK and public driver/plugin boundaries; add a narrow plugin only for the missing boundary needed by the selected run.
-- [ ] Select one minimal static-manipulation path on the better-supported available robot, with manual reset and a named human safety owner.
-- [ ] Use the upstream hardware rollout/intervention loop where it meets the path; add only the launch, supervision and evidence overlay required for reproducibility.
-- [ ] Record success-label provenance, safety events and interventions from the first hardware run.
-- [ ] Keep the first claim to lifecycle, safety and repeatability; do not infer sim-to-real capability from a wiring run.
+### Phase 2 — release and next-scope decision
 
-No other robot is a Phase-2 target unless hardware availability changes and this plan is revised.
+- [ ] Add a CI smoke matrix for MuJoCo, Isaac and Genesis with explicit GPU/Isaac availability handling.
+- [ ] Pin containers and assets, replay patches, and verify clean bundle materialization.
+- [ ] Stabilize result schemas, comparison reports, timeout handling and backend-native diagnostics.
+- [ ] Submit generally useful changes upstream after the reference paths are measured; retain valuable cross-project integrations when no upstream owns them.
+- [ ] Publish supported task/backend combinations and explicit non-equivalences.
+- [ ] Review the available Unitree G1 and AgiBot G2 only after the simulation completion gate; create a separate hardware milestone if approved.
 
-### Phase 3 — Isaac best-practice reference integration
+**Exit:** a versioned sim-eval release is reproducible across the three backend adapters, with no real-robot implementation hidden in scope.
 
-- [ ] Materialize RoboDojo through its published `EvalEnv`, task YAML and manager boundaries as the native baseline; do not describe that path as Isaac Lab-Arena.
-- [ ] Implement a crossrun-owned Arena reference integration for a narrow, representative RoboDojo task slice, using upstream assets and task intent where licensing permits rather than copying its managers wholesale.
-- [ ] Define semantic conformance for scene, robot, reset distribution, observations, actions, controllers, termination and success before comparing the two paths.
-- [ ] Compare native RoboDojo and the Arena reference path on composition complexity, reuse, vectorisation, performance, reproducibility, LeRobot/EnvHub interoperability and upgrade burden.
-- [ ] Evaluate Lightwheel-LIBERO on Isaac Lab-Arena as an explicitly adapted environment; document task, reset, camera, controller and success-predicate differences before selecting a matched study.
-- [ ] Keep original LIBERO, Lightwheel-LIBERO, RoboDojo-native and crossrun Arena-reference result groups separate while using the common evidence envelope.
-- [ ] Validate Arena's G1 path independently from the original MuJoCo and physical G1 paths.
-- [ ] Add GR00T-WBC/SONIC only after its encoder, decoder, hands, cameras and low-level controller are independently validated for the selected embodiment.
-- [ ] Publish the Arena adoption decision: upstream proposal, continued crossrun ownership, dedicated fork or deletion, with evidence for the selected outcome.
+### 9.1 Simulation completion and hardware gate
 
-### Phase 4 — stabilize, upstream and govern local ownership
+Real-robot work is discussed only after:
 
-- [ ] Replay every patch against current pinned upstream candidates and delete patches made obsolete by upstream changes.
-- [ ] Submit or track generally useful changes in LeRobot, XPolicyLab, RoboDojo, Arena or their actual owner repository.
-- [ ] Turn accepted upstream changes into bundle revision updates and removal of the corresponding overlay.
-- [ ] Keep rejected or out-of-scope reference integrations runnable in crossrun when their measured value exceeds their maintenance cost; rejection alone is not a deletion trigger.
-- [ ] Pin Genie Sim revisions and inventory file-level licenses only if G2 remains the selected hardware path.
-- [ ] Publish negative results, rejected integrations, upstream disposition and remaining patch ownership.
-- [ ] Demonstrate that each crossrun-owned implementation is a coherent cross-project reference path rather than an unattributed duplicate simulator, policy catalog or benchmark.
+- the π0.5 + LIBERO MuJoCo baseline is reproducible from a clean bundle;
+- the same eval loop runs unchanged against MuJoCo, Isaac and Genesis adapters;
+- every adapter passes lifecycle, capability and native-trace conformance fixtures;
+- task ports are labelled as distinct conditions unless semantic equivalence is demonstrated;
+- policy/environment mismatches fail during preflight rather than during a rollout;
+- evidence records preserve engine versions, native diagnostics, timing and failure reasons;
+- the remaining patch and integration burden is reviewed and owned.
 
-### 9.1 Phase 0 continuation gate
+Passing this gate authorizes a new hardware design discussion; it does not automatically select G1, G2 or a real-robot interface.
 
-crossrun is an integration distribution and incubator, not a platform that must exist forever. After Phase 0, continue as a standalone repository while it makes selected multi-upstream paths materially faster, more reproducible or architecturally better than assembling them ad hoc:
+### 9.2 Optional XPolicyLab upgrade gate
 
-- a clean checkout materializes both Phase-0 paths at exact revisions without manual source edits;
-- versioned compatibility profiles and provenance catch real policy/environment mismatches that upstream launch scripts do not;
-- native upstream execution output is preserved while a common evidence envelope enables reproducible comparison;
-- every overlay or reference integration has a named owner, fixture, lifecycle intent and reassessment condition;
-- at least one best-practice hypothesis can be implemented and compared here without waiting for coordinated acceptance across upstream repositories;
-- total patch and reference-code cost remains small enough to review during every upstream sync.
+Never track XPolicyLab `main` implicitly. If an active sim bundle uses the fork, an upstream sync requires:
 
-If upstreams provide a coherent replacement, crossrun removes the superseded plugin or patch and narrows to the remaining bundles, reference integrations, conformance fixtures and documentation. A local implementation is deleted when its hypothesis fails or an upstream path replaces it without losing the measured benefit. It may remain when it provides valuable cross-project composition that no single upstream is positioned to own. Permanent, fragile adaptation of private upstream internals is still a signal to redesign the boundary or move the work to a maintained fork.
+1. a consumption-profile diff and patch replay;
+2. clean materialization of every active bundle that uses it;
+3. end-to-end regression of those sim fixtures through the unchanged eval loop;
+4. latency, memory, timeout and failure-recovery comparison;
+5. an explicit rollback revision and updated upstream disposition for retained patches.
 
-### 9.2 XPolicyLab upgrade gate
-
-Never track XPolicyLab `main` implicitly. An upstream sync into the crossrun fork is a separate bundle change with:
-
-1. an old-to-new consumption-profile diff;
-2. adapter static checks;
-3. patch replay and clean bundle materialization;
-4. end-to-end bundle regression on:
-   - π0.5 + LIBERO/Panda;
-   - π0.5 + ALOHA Sim;
-   - one LeRobot-native rollout through the remote-policy plugin;
-   - one stateful or world-action policy;
-   - one non-batched policy;
-5. performance measurements for latency, throughput and memory;
-6. native-output and evidence-envelope comparison against the previous pinned service revision;
-7. updated upstream PR/issue disposition and removal dates for every retained patch.
-
-During bootstrap, the gate runs every fixture that exists at the current phase and records later-phase fixtures as unavailable, not passed. Each fixture becomes mandatory as soon as its phase lands and can never be silently removed from the gate. A security-only sync may use this scoped gate, but still requires a profile diff, the current fixtures and an explicit rollback revision.
-
-An upstream addition is not automatically enabled merely because it exists in the XPolicyLab catalog. Fork patches are rebased deliberately, and conflicts are resolved as product changes rather than hidden merge maintenance.
+An adapter is not added merely because it exists in the XPolicyLab catalog. It enters the matrix only when a selected sim-eval path requires it.
 
 ---
 
@@ -725,9 +731,10 @@ An upstream addition is not automatically enabled merely because it exists in th
 | **Remote-policy bridge cannot express a complex policy** | High | preserve native execution where possible; version a narrow extension and propose it upstream |
 | **Checkpoint/model-family confusion** | High | immutable policy profiles and compatibility preflight |
 | **LeRobot bridge falsely appears universal** | Med-high | declare supported lifecycle/capabilities; require policy-specific validation |
+| **Common interface hides backend differences** | High | standardise lifecycle only; require capability profiles, namespaced diagnostics and separate result groups |
+| **Adapter conforms syntactically but not behaviourally** | High | compare fixed action traces and native baselines within declared tolerances |
 | **Execution-owner semantics differ** | High | record owner and lifecycle; compare only explicitly aligned evidence fields |
 | **Result normalization loses upstream detail** | High | preserve native output; make result adapters additive and versioned |
-| **Success-label error on hardware** | High | audit labels and report measurement process |
 | **Cross-environment overinterpretation** | Med-high | stratified reports and interaction analysis |
 | **Asset/license ambiguity** | High | per-file and per-weight manifests; no blanket ecosystem claim |
 
@@ -766,7 +773,7 @@ Open-source and non-commercial intent do not remove these obligations.
 
 | Option | Why not now |
 |---|---|
-| Build a universal crossrun episode framework first | duplicates maintained upstream loops before a concrete gap is measured |
+| Build one universal sim-and-real episode framework | hides hardware safety and reset semantics; own only the bounded sim loop now |
 | Treat current upstream architecture as the ceiling | prevents cross-project ideas from being implemented and evaluated |
 | Propose a large upstream migration before it runs in crossrun | shifts design risk to maintainers and makes rejection likely without evidence |
 | Convert every checkpoint to one universal weight format | expensive, lossy and unnecessary for execution unification |
@@ -785,23 +792,17 @@ Open-source and non-commercial intent do not remove these obligations.
 
 ## 12. Open questions
 
-These are measurements to make, not conclusions already reached.
+These are measurements that can block the three current phases.
 
-1. Which fork extensions should be proposed upstream immediately, and which remain crossrun-specific?
-2. Is the selected XPolicyLab fork revision reliable under concurrent load, true transport batching, timeout and supervised restart?
-3. Which stateful policies require lifecycle semantics beyond reset, predict and end-episode?
-4. Which XPolicyLab policy lifecycles can the LeRobot remote-policy plugin cover without policy-specific crossrun code?
-5. Can converted and original-runtime versions of the same model be shown behaviourally equivalent on fixed observations?
-6. Which fields are sufficient for a safe policy/environment compatibility preflight?
-7. How should action chunks be resampled when service and environment frequencies differ?
-8. Does `pi05_aloha` with `pi05_base` produce a meaningful ALOHA Sim smoke test, and if not, which π0.5 task-tuned checkpoint should Phase 0 use?
-9. Which exact G1 or G2 hardware configuration has the best-matched public controller, observation profile and checkpoint for the first minimal real run?
-10. Which XPolicyLab adapters have a publicly reproducible known-good result rather than only a wiring check?
-11. Can a second environment reproduce a matched task closely enough for an interpretable interaction study?
-12. Which upstream assets and weights can legally be redistributed, and which must be fetched by the user?
-13. Which Lightwheel-LIBERO tasks are close enough to original LIBERO tasks for a controlled environment-interaction study, after all semantic differences are recorded?
-14. Does an Arena-based RoboDojo reference path measurably improve composition, reuse, interoperability and upgrade cost after accounting for migration effort, performance and semantic drift?
-15. If that path is valuable but outside RoboDojo's scope, should it remain a crossrun integration or move to a dedicated maintained fork?
+1. What is the smallest task/embodiment fixture that can exercise MuJoCo, Isaac and Genesis without pretending the ports are benchmark-identical?
+2. Which `SimCapabilities` fields are required for deterministic reset, vectorisation, rendering and control-timing preflight?
+3. What tolerance should fixed-action native-versus-crossrun traces use for each engine?
+4. How should action chunks be resampled when policy and environment frequencies differ?
+5. Does `pi05_aloha` with `pi05_base` produce a useful second MuJoCo fixture, and if not, which π0.5 task-tuned checkpoint should replace it?
+6. Does the Arena-based RoboDojo reference path improve composition and maintenance after accounting for migration effort, performance and semantic drift?
+7. Which Genesis public APIs provide the cleanest Gymnasium adapter boundary, and which capabilities require explicit unsupported declarations?
+8. Which active sim path actually requires XPolicyLab rather than a native policy endpoint?
+9. Which selected assets and weights may be redistributed, and which must be fetched by the user?
 
 ---
 
@@ -814,6 +815,7 @@ These are measurements to make, not conclusions already reached.
 | OpenVLA | https://github.com/openvla/openvla |
 | OpenVLA-OFT | https://github.com/moojink/openvla-oft |
 | LeRobot | https://github.com/huggingface/lerobot |
+| Gymnasium | https://github.com/Farama-Foundation/Gymnasium |
 | LIBERO | https://github.com/Lifelong-Robot-Learning/LIBERO |
 | gym-aloha | https://github.com/huggingface/gym-aloha |
 | Isaac Lab-Arena | https://github.com/isaac-sim/IsaacLab-Arena |
