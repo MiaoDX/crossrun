@@ -12,6 +12,8 @@ Models infer. Environments simulate or drive hardware. Something still has to de
 
 crossrun is that execution layer.
 
+It is intentionally conditional. If XPolicyLab plus maintained environment projects provide the same backend-neutral episode lifecycle, compatibility checks and provenance, crossrun should contribute its remaining gaps upstream and shrink or stop rather than become a duplicate platform.
+
 ```text
  upstream policy implementations and checkpoints
  OpenPI · OpenVLA · LeRobot · GR00T · WAMs · custom repos

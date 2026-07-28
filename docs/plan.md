@@ -280,7 +280,7 @@ An Isaac robot asset or a similarly named task does not reproduce an original Mu
 
 **Upstream check, 2026-07-28.** Isaac Lab-Arena `main` at `99b557d0d7473d7fc81c0d64308e744899f68ad8` provides Franka and G1 embodiments and links to Lightwheel's LW-BenchHub. LW-BenchHub `main` at `b2bcb2d00edef691f9fcc49039cbf0bcc7464605` advertises 130 **adapted** Lightwheel-LIBERO tasks on Isaac Lab-Arena, including datasets for G1 and other robots. This is a useful second-backend candidate, but it is not the original LIBERO environment or a drop-in replacement for the `pi05_libero` baseline.
 
-RoboDojo `main` at `e0703b03bb1af6075400e9d60dc17a792793960c` uses native Isaac Sim task, scene, robot and success-condition configurations. It includes a Franka robot and 42 simulated tasks, but no LIBERO benchmark implementation and no ALOHA robot or environment. XPolicyLab supplies policy-side adapters and a client-server boundary; it does not turn those RoboDojo tasks into LIBERO or ALOHA. No current XPolicyLab/RoboDojo path supports treating ALOHA Sim as an Isaac backend. Such a path would require an ALOHA articulation/USD, cameras, controller and action mapping, task/reset definitions, success predicates, and a separately validated checkpoint profile.
+RoboDojo `main` at `e0703b03bb1af6075400e9d60dc17a792793960c` runs custom RoboDojo environment managers, task YAML and success logic directly on Isaac Sim 5.1 and a pinned Isaac Lab 2.3 fork. Although its README acknowledges Isaac Lab-Arena as an upstream project, the checked execution path neither imports `isaaclab_arena` nor includes it as a submodule; RoboDojo is not an Arena benchmark package at this revision. It includes a Franka robot and 42 simulated tasks, but no LIBERO benchmark implementation and no ALOHA robot or environment. XPolicyLab supplies policy-side adapters and a client-server boundary; it does not turn those RoboDojo tasks into LIBERO or ALOHA. No current XPolicyLab/RoboDojo path supports treating ALOHA Sim as an Isaac backend. Such a path would require an ALOHA articulation/USD, cameras, controller and action mapping, task/reset definitions, success predicates, and a separately validated checkpoint profile.
 
 ### 5.2 Baseline snapshot
 
@@ -615,7 +615,18 @@ A learned classifier is a measurement instrument, not ground truth. Hardware rep
 - [ ] Publish negative results and rejected integrations, not only successful demos.
 - [ ] Consider EnvHub and upstream contributions after contracts survive multiple policies and backends.
 
-### 9.1 XPolicyLab upgrade gate
+### 9.1 Phase 0 continuation gate
+
+crossrun is an interoperability experiment, not a platform that must exist forever. Its fork and wrappers are not independent product value. After Phase 0, continue as a standalone repository only if the evidence shows that crossrun provides at least one durable capability not available as a coherent upstream path:
+
+- one unchanged Runner owns complete episodes across both original LIBERO and ALOHA Sim while XPolicyLab remains policy-only;
+- versioned compatibility profiles and provenance catch real policy/backend mismatches that upstream launch scripts do not;
+- the same contracts can admit an available G1 or G2 hardware backend without adopting a benchmark-specific runner;
+- the fork patch set remains small, regression-tested and plausibly upstreamable.
+
+If XPolicyLab plus RoboDojo, Arena or LeRobot acquires these capabilities before the gate is reached, prefer upstream contributions and archive or reduce crossrun to conformance fixtures and documentation. Duplicating a maintained upstream runner is an explicit stop condition, not a reason to expand scope.
+
+### 9.2 XPolicyLab upgrade gate
 
 Never track XPolicyLab `main` implicitly. An upstream sync into the crossrun fork is a separate change with:
 
