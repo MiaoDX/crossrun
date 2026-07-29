@@ -1,81 +1,83 @@
 # crossrun
 
-**One sim-eval surface. Multiple physics backends. Reproducible results.**
+**One portable sim-eval loop. Explicit runtime boundaries. Reproducible evidence.**
 
-A simulation-first integration distribution and best-practice incubator for evaluating robot policies across MuJoCo, Isaac and Genesis. crossrun owns a small evaluation harness, pins known-good upstream revisions, checks policy/environment compatibility, and records enough evidence to reproduce a run.
+A simulation-first integration distribution and best-practice incubator for evaluating robot policies across MuJoCo-, Isaac-, and Genesis-based environments. crossrun pins known-good upstream revisions, materializes complete bundles, checks policy/environment compatibility, runs a bounded scalar episode loop, and records enough evidence to reproduce a result.
 
-> **Status: design phase.** The architecture is under validation; code has not started.
+> **Status: design phase.** The architecture is under validation; implementation has not started.
 
 ## The idea
 
-The robotics stack is moving quickly, but a working experiment still depends on an exact combination of policy code, checkpoint, environment, robot driver, processors, controller and launch configuration. Waiting for every upstream to converge blocks use; copying those projects creates permanent maintenance work.
+A working robot-policy experiment depends on an exact combination of policy code, checkpoint, processors, environment, assets, controller, renderer, launch topology, and evaluation settings. Waiting for every upstream to converge blocks use; copying those projects creates permanent maintenance work.
 
-crossrun is the controlled middle ground: preserve upstream execution paths as reproducible baselines, build better reference paths where current upstream architecture is limiting, and use evidence before deciding whether a change should move upstream, remain here, or be deleted.
+crossrun is the controlled middle ground: preserve upstream-native execution as the oracle, build a small portable evaluation path against the same artifacts, and use conformance evidence before deciding whether a change should move upstream, remain here, or be deleted.
 
 ```text
- policies and checkpoints
- LeRobot · XPolicyLab · OpenPI · other runtimes
-                         │
-                         ▼
-              crossrun sim eval
- bundle · policy endpoint · episode loop · evidence
-                         │
-                         ▼
-     Gymnasium-compatible simulation interface
-                         │
-             ┌───────────┼───────────┐
-             ▼           ▼           ▼
-          MuJoCo    Isaac / Arena   Genesis
+ pinned bundle
+ policy artifact · endpoint · environment · execution · evidence
+                              │
+                    crossrun coordinator
+                    materialize · launch · supervise
+                              │
+              ┌───────────────┴────────────────┐
+              ▼                                ▼
+       policy worker                    simulator worker
+ native runtime or service       scalar episode loop + environment
+              │                                │
+              └──────── PolicyEndpoint ────────┘
+                                               │
+                                  Gymnasium scalar lifecycle
+                                               │
+                         ┌─────────────────────┼─────────────────────┐
+                         ▼                     ▼                     ▼
+                LIBERO + MuJoCo      Arena/Isaac environment   Genesis environment
 ```
 
-**Get one result first.** The first vertical slice is π0.5 + original LIBERO/Panda on MuJoCo. It proves bundle materialization, the policy endpoint, the sim interface, the evaluation loop and the evidence record end to end. ALOHA Sim becomes the second contract fixture after that path works.
+**Get one exact result first.** Phase 0 uses Physical Intelligence's original OpenPI `pi05_libero` configuration, original checkpoint, original LIBERO/Panda environment, and OpenPI evaluator as the native oracle. The crossrun path must use the same policy artifact and task definitions; a LeRobot port or additionally fine-tuned checkpoint is a separate lineage, not an interchangeable baseline.
 
-**Keep backend switching honest.** The shared surface follows Gymnasium reset/step/termination semantics and adds explicit capabilities, task identity and provenance. It makes backend adapters easy to exchange; it does not claim that a MuJoCo task, an Isaac port and a Genesis port are physically or semantically identical.
+**Define both sides of the loop.** `PolicyEndpoint` owns policy reset and complete action-chunk prediction. `SimBackend` creates one scalar Gymnasium environment. Policy artifact metadata, endpoint/runtime capabilities, and action-execution scheduling are separate profiles.
 
-**Incubate before upstreaming.** RoboDojo's native Isaac Sim/Isaac Lab path remains a baseline. An Arena-based version can first live here behind the common sim interface, where it can be compared before deciding whether to upstream it, retain it, fork it or delete it.
+**Keep process boundaries explicit.** The policy and simulator run in separate workers by default. This isolates model dependencies from Isaac application startup and Genesis global initialization, and it makes “switching backend” a pinned launch-topology change rather than an unsafe hot switch inside one Python process.
 
-Real-robot support is deferred until sim eval works across backends. The policy endpoint and evidence schema stay extensible for the available Unitree G1 and AgiBot G2, but the current milestone contains no real driver, controller or hardware rollout.
+**Keep environment switching honest.** The common surface standardizes reset/step/termination lifecycle only. Environment framework, physics backend, renderer, task package, assets, controller, reset distribution, and success semantics remain first-class identity fields. An Isaac or Genesis port is never reported as the original MuJoCo benchmark.
 
 ## Initial paths
 
-The first MuJoCo bundle is intentionally narrow:
+1. **Primary baseline:** OpenPI `pi05_libero` + original LIBERO/Panda on MuJoCo.
+2. **Second scalar fixture:** OpenPI `pi0_aloha_sim` + gym-aloha. It exercises 14-D dual-arm state/action semantics, optional wrist cameras, a 50 Hz control loop, and a predicted chunk that is executed in shorter prefixes.
+3. **Later backend fixture:** one narrowly defined task/embodiment profile implemented on at least two environment stacks with explicit semantic limits.
 
-1. **Primary:** LIBERO / Panda with `pi05_libero` — the first end-to-end result.
-2. **Second fixture:** ALOHA Sim with a validated π0.5 ALOHA profile — proves that the interface handles different observation and action semantics.
-
-Use the native LeRobot/OpenPI path as a result baseline. Add the XPolicyLab remote-policy bridge only when the selected model path needs original-runtime serving; it is no longer a phase by itself.
+XPolicyLab remains an optional endpoint implementation for policies that need heterogeneous original-runtime serving. It is not required for the first result and is enabled only after its session, retry, deadline, queue, payload, and attestation semantics satisfy the selected bundle.
 
 ## Planned demos
 
-1. **First result.** Reproduce π0.5 + LIBERO through the crossrun sim interface from one pinned bundle.
-2. **Backend switch.** Run the unchanged evaluation loop against MuJoCo, Isaac and Genesis, including one declared task/embodiment profile on at least two engines.
-3. **Best-practice comparison.** Run a RoboDojo-native baseline beside an Arena-based reference integration and measure whether Arena improves composition, reuse and maintenance enough to justify migration.
+1. **Native equivalence.** Reproduce the OpenPI π0.5 + LIBERO result, then compare fixed observations, controlled inference randomness, action chunks, reset behavior, and termination semantics through crossrun.
+2. **Environment change.** Run the unchanged scalar episode driver against separately identified MuJoCo-, Isaac-, and Genesis-based environment conditions.
+3. **Best-practice comparison.** Run a RoboDojo-native baseline beside an Arena-based reference integration and measure semantic fidelity, composition, performance, interoperability, migration effort, and maintenance cost.
 
 ## Design constraints
 
-- The crossrun episode loop is simulation-only and consumes a Gymnasium-compatible environment; it is not a universal sim/real runner.
-- Backend adapters expose capabilities and preserve engine-native diagnostics instead of hiding semantic differences.
-- For compatibility fixes, prefer wrapper, then plugin, then temporary patch, then fork; reference experiments choose the smallest shape that can test their architectural hypothesis.
-- Fork commits stay small, independently testable and suitable for upstream submission where generally useful.
-- Best-practice claims require an explicit comparison against the upstream-native baseline; newer architecture is not assumed better by name alone.
-- Policy integrations preserve original checkpoints when practical; conversion is optional and explicitly recorded.
-- Every runnable bundle declares policy/environment compatibility across observations, actions, normalization, timing, statefulness and controllers.
-- Evaluation records include upstream revisions, local deltas, checkpoint digests, environment identity, task revision, termination, safety events and success-label provenance.
-- Policy servers default to loopback. Remote serving requires authenticated transport, schema validation and network isolation.
-- Every redistributed asset and model records its exact source revision and license obligations.
-- Isaac ports are distinct environments. Lightwheel-LIBERO is never reported as the original MuJoCo LIBERO baseline.
-- Genesis is the targeted physics backend; AgiBot Genie Sim belongs to deferred G2 work and is not part of the current milestone.
+- Phase 0 supports one scalar `gym.Env`; `VectorEnv` uses a separate driver and is not hidden behind a union return type.
+- The simulator worker owns environment lifecycle; the policy worker owns model runtime state. Cross-process messages carry stable trial, request, and sequence identities.
+- Policy randomness is explicit. Environment, initial-state, policy, inference-noise, perturbation, and scheduler seeds are recorded separately.
+- Action profiles distinguish model-output horizon, executed prefix, replan interval, control period, interpolation, clipping, and stale-action behavior.
+- Native baselines and crossrun paths use the same artifact lineage when behavioral equivalence is claimed.
+- Backend adapters preserve engine-native diagnostics and terminal observations instead of reducing results to a lossy success tuple.
+- Environment identity separates framework, physics backend, renderer, task package, asset revision, and controller.
+- Local wrappers, plugins, patches, forks, and reference integrations have an owner, pinned base, regression fixture, review date, and exit condition.
+- Policy servers bind to loopback by default. Remote mode requires authenticated transport, bounded payloads and queues, schema validation, and network isolation.
+- Every redistributed source, asset, dataset, and model records its exact revision and applicable license obligations.
 
 ## Roadmap
 
-1. **Phase 0 — first sim result:** π0.5 + LIBERO + MuJoCo through the crossrun eval loop.
-2. **Phase 1 — backend switching:** add Isaac/Arena and Genesis without changing the loop.
-3. **Phase 2 — release and decide:** stabilize the sim matrix, then decide whether to start a separate hardware milestone.
+1. **Phase 0 — exact scalar baseline:** OpenPI π0.5 + original LIBERO + MuJoCo through a typed `PolicyEndpoint`, scalar `SimBackend`, and evidence envelope.
+2. **Phase 1 — environment and vector extensions:** add separately identified Isaac/Arena and Genesis conditions; add a dedicated vector driver only after scalar semantics are stable.
+3. **Phase 2 — release and scope gate:** stabilize the supported matrix, optional XPolicyLab bridge, CI, artifacts, and reports; then decide whether a separate hardware milestone is justified.
 
 ## Docs
 
-- [`docs/plan.md`](docs/plan.md) — bundle architecture, overlay governance, compatibility, evaluation protocol, phases, risks, and open questions
-- [`docs/research/`](docs/research/) — the surveys behind the design, including conclusions that were later overturned
+- [`docs/plan.md`](docs/plan.md) — runtime topology, contracts, bundle profiles, conformance, evaluation protocol, phases, risks, and open questions
+- [`docs/research/`](docs/research/) — dated surveys behind the design, including conclusions later superseded
 
 ## License
 

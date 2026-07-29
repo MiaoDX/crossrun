@@ -1,8 +1,6 @@
 # Research archive
 
-The design in [`../plan.md`](../plan.md) did not appear from nowhere. These are the three surveys behind it, in the order they were produced.
-
-**How to read these.** They are **snapshots of a design process**, not final conclusions. The project was rescoped partway through — from an internal evaluation system to an open reference design — so some early judgements have since been overturned. **Known corrections are listed below**; historical judgements remain intact, while clear factual and arithmetic errors are corrected in place.
+The current design in [`../plan.md`](../plan.md) grew out of the three surveys below. They are snapshots of a design process, not current compatibility guarantees. Historical judgements remain intact; clear factual or arithmetic errors are corrected in place and the current decision is recorded here.
 
 | # | Document | When | Question it answered |
 |---|---|---|---|
@@ -16,26 +14,25 @@ The design in [`../plan.md`](../plan.md) did not appear from nowhere. These are 
 
 ### 01 — Ecosystem landscape
 
-- **The picture of the Isaac ecosystem is too static.** Later checking found that Isaac Lab has frozen its `main` branch and is migrating its physics layer from PhysX to Newton, whose primary backend is MuJoCo-Warp. That shift became clear only after this document was written.
-- **The original LIBERO episode counts were wrong.** OpenVLA uses 50 rollouts per task, 500 per 10-task suite and 2,000 across all four suites for one seed, not 500 per task and 2,000 per suite.
+- **Isaac Lab is now multi-backend; it is not simply replacing PhysX with Newton.** At the checked July 2026 state, PhysX remains the default Isaac Sim path, while Newton-MJWarp, Newton-Kamino and OvPhysX are selectable backends with different maturity and task coverage. “`main` was frozen” describes a repository transition, not removal of PhysX.
+- **The original LIBERO episode counts were wrong.** The OpenVLA protocol uses 50 rollouts per task, 500 per 10-task suite and 2,000 across four suites for one seed, not 500 per task and 2,000 per suite.
+- **MuJoCo does not require an external renderer.** It has a native OpenGL visualizer with onscreen and offscreen rendering. External renderers remain optional for higher-end photorealism or specialized sensor pipelines.
 
 ### 02 — Red-team review
 
-- **The cost and compute section no longer applies.** It assumed a compute-constrained team and recommended deferring Isaac on that basis; the team in fact has a 4090 cluster, so the constraint does not hold.
-- **Commercial product licensing is no longer the immediate driver**, because the project is open source with no planned commercialisation. Redistribution, attribution, model-weight and bundled-component obligations still apply; the licence audit remains required.
-- Its **analysis of Isaac ecosystem churn, statistical power, and Goodhart effects remains valid**, and has since been reinforced by further evidence.
+- **The cost and compute section no longer determines the roadmap.** It assumed a compute-constrained team and recommended deferring Isaac on that basis; the team has a 4090 cluster, so that premise does not hold.
+- **Commercial product licensing is not the immediate scope driver**, because the project is open source with no planned commercialisation. Redistribution, attribution, model-weight, dataset, asset, and bundled-component obligations still apply; the license audit remains required.
+- Its analysis of ecosystem churn, statistical power, and Goodhart effects remains useful, but every dated platform claim must be rechecked before use in a bundle.
 
 ### 03 — Humanoid frameworks survey
 
-- **The document itself corrects one significant error**: SIMPLE does not ship GEAR-SONIC. The item is still an unchecked TODO in its README, and its simulation path uses decoupled WBC.
-- **Its central recommendation — fork SIMPLE as the foundation — was later overturned.** Roughly 4 fps of ray tracing on a single GPU makes the target statistical scale expensive, but fps and rollout count are not directly comparable. Wall time must be estimated from episode steps, achieved parallelism and trial count. SIMPLE is now a **task-design reference** (MIT-licensed, legitimately borrowable) rather than a dependency.
+- **SIMPLE does not ship GEAR-SONIC in its simulation path.** The roadmap item was unchecked at the survey revision, and the implemented path used decoupled WBC.
+- **The recommendation to fork SIMPLE as the foundation was overturned.** Roughly 4 fps of ray-traced rendering can make large evaluations expensive, but fps and rollout count are not directly comparable. Wall time must be estimated from episode steps, achieved parallelism, rendering cadence, and trial count. SIMPLE remains a task-design reference rather than a current dependency.
 
 ---
 
-## One narrative that was thrown out
+## Superseded narratives
 
-Midway through, a handful of GitHub issues led to a "VLA reproducibility crisis" framing. **That framing was rejected.** The sourcing was biased: GitHub issues are a complaint channel, and nobody opens one to report that things worked.
+A handful of GitHub issues originally led to a “VLA reproducibility crisis” framing. That framing was rejected because issue trackers systematically over-sample failures. The more defensible conclusion is narrower: models and leaderboards exist, while exact headline-number reproduction is fragile when checkpoints, transforms, seeds, reset distributions, action scheduling, and simulator details are underspecified.
 
-Checking the other direction gave a more accurate picture: **models run, leaderboards get published, comparisons hold.** What is fragile is reproducing a specific headline number exactly — a protocol problem, not a capability problem. The supporting context is in the ecosystem survey and the current evaluation rules in [`../plan.md`](../plan.md) §8.
-
-The lesson is worth recording on its own: **searching deliberately for negative evidence systematically overstates how bad things are.**
+The current project therefore does not infer compatibility or credibility from model-family names, catalog entries, or a single score. It requires pinned artifact lineage, a native oracle, typed runtime profiles, and conformance evidence.
